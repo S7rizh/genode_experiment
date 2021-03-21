@@ -1,0 +1,58 @@
+#
+# Build
+#
+
+set build_components {
+  core init app/phantom
+}
+
+build $build_components
+
+# create_boot_directory
+
+#
+# Generate config
+#
+
+ append config {
+ <config>
+   <parent-provides>
+     <service name="ROM"/>
+     <service name="RAM"/>
+     <service name="LOG"/>
+   </parent-provides>
+   <default-route>
+     <any-service> <parent/> <any-child/> </any-service>
+   </default-route>
+   <start name="phantom">
+     <resource name="RAM" quantum="128M"/>
+     <config>
+       <sdl_audio_volume value="100"/>
+       <libc stdout="/dev/log" stderr="/dev/log">
+         <vfs>
+           <tar name="phantom.tar"/>
+           <dir name="dev"> <log/> </dir>
+         </vfs>
+       </libc>
+     </config>
+   </start>
+ </config>}
+ install_config $config
+
+#
+# Boot image
+#
+
+set boot_modules {
+  core init ld.lib.so
+  libc.lib.so
+  phantom phantom.tar
+}
+build_boot_image $boot_modules
+
+#
+# QEMU
+#
+
+append qemu_args " -m 256 "
+run_genode_until forever

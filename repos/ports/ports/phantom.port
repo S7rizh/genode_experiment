@@ -1,0 +1,7 @@
+ LICENSE   := LGPLv3
+ VERSION   := git
+ DOWNLOADS := phantom.git
+
+ URL(phantom) := https://github.com/S7rizh/phantomuserland
+ DIR(phantom) := src/app/phantom
+ REV(phantom) := 5c27a8aef28034bbe7112b989e67c3cc3b825a48
