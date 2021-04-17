@@ -53,13 +53,12 @@ create_boot_directory
           <dir name="pcode">
             <dir name="plib">
               <dir name="bin">
-                <rom name="classes"/>
-              </dir> 
-            </dir>
-            <dir name="pc">
-              <tar name="pc_classes.tar" label="pc" />
+                <tar name="phantom_bins.tar" />
+              </dir>
             </dir>
           </dir>
+
+            <tar name="phantom_bins.tar" />
         </vfs>
      </config>
    </start>
@@ -77,9 +76,7 @@ set boot_modules {
   libm.lib.so
   posix.lib.so
   vmonly
-  pclasses.tar
-  pc_classes.tar
-  classes
+  phantom_bins.tar
 }
 build_boot_image $boot_modules
 

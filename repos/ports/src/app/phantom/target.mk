@@ -130,7 +130,7 @@ INC_DIR += $(PHANTOM_HOME)/phantom/gl
 # Debug
 
 CC_C_OPT += -g
-CC_C_OPT += -DDEBUG
+# CC_C_OPT += -DDEBUG=1
 
 
 # Flags and macros from Phantom build system
