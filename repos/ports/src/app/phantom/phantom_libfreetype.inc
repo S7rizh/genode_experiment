@@ -1,5 +1,4 @@
 SRC_LIBFREETYPE = phantom/libfreetype/sfnt.c \
-									phantom/libfreetype/ttgload.c \
 									phantom/libfreetype/ftutil.c \
 									phantom/libfreetype/ftoutln.c \
 									phantom/libfreetype/ttsbit.c \
@@ -18,16 +17,39 @@ SRC_LIBFREETYPE = phantom/libfreetype/sfnt.c \
 									phantom/libfreetype/ftgloadr.c \
 									phantom/libfreetype/ftbase.c \
 									phantom/libfreetype/ftdbgmem.c \
+									phantom/libfreetype/sfobjs.c \
 									phantom/libfreetype/autofit.c \
 									phantom/libfreetype/fttrigon.c \
 									phantom/libfreetype/ftnames.c \
-									phantom/libfreetype/ttobjs.c \
+									phantom/libfreetype/ttkern.c \
+									phantom/libfreetype/ttload.c \
 									phantom/libfreetype/ftcalc.c \
 									phantom/libfreetype/ftgrays.c \
-									phantom/libfreetype/ttdriver.c \
-									phantom/libfreetype/ftglyph.c \
-									phantom/libfreetype/ttpload.c
+									phantom/libfreetype/ftglyph.c
 
+
+									# phantom/libfreetype/sfdriver.c \
+
+
+# phantom/libfreetype/ttdriver.c \
+# phantom/libfreetype/ttpload.c \
+# phantom/libfreetype/ttgload.c \
+# phantom/libfreetype/ttobjs.c \
+
+
+# Fixing undefined references
+
+# SRC_LIBFREETYPE += phantom/libfreetype/ttcmap.c
+
+# phantom/libfreetype/ttcmap.c \ # Mul Def from sfnt.c
+# phantom/libfreetype/afangles.c \
+# phantom/libfreetype/afglobal.c \
+# phantom/libfreetype/afhints.c \
+# phantom/libfreetype/afdummy.c \
+# phantom/libfreetype/aflatin.c \
+# phantom/libfreetype/afloader.c \
+# phantom/libfreetype/afmodule.c \
+									
 # sfnt.c includes
 #include "ttload.c"
 #include "ttcmap.c"
@@ -43,6 +65,13 @@ SRC_LIBFREETYPE = phantom/libfreetype/sfnt.c \
 #include "aflatin.c"
 #include "afloader.c"
 #include "afmodule.c"
+
+# truetype.c includes
+#include <ft2build.h>
+#include "ttdriver.c"   /* driver interface    */
+#include "ttpload.c"    /* tables loader       */
+#include "ttgload.c"    /* glyph loader        */
+#include "ttobjs.c"     /* object manager      */
 
 # SRC_LIBFREETYPE = phantom/libfreetype/sfnt.c
 

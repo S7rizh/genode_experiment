@@ -25,6 +25,5 @@ SRC_LIBPHANTOM = phantom/libphantom/console_color.c \
 								 phantom/libphantom/lzma/LzmaDec.c \
 								 phantom/libphantom/lzma/simpleDecode.c \
 								 phantom/libphantom/unix/fname.c
-								#  phantom/libphantom/ia32/atomic.S
 
 SRC_C += $(SRC_LIBPHANTOM)

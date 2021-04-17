@@ -92,29 +92,63 @@ SRC_C += $(PVM_MAIN)
 
 vpath %.c $(PHANTOM_HOME)
 
-ARCH = amd64
+# From local-config.mk
+
+export PHANTOM_HOME=$(call select_from_ports,phantom)/src/app/phantom
+export ARCH = genode-amd64
+export BOARD = amd64-pc
+export PHANTOM_GENODE = 1
+
+# libc includes. Have to be before Phantom includes
+# XXX : Not really a good solution. Probably should fix
+
+LIBC_DIR = $(call select_from_ports,libc)
+
+INC_DIR += $(LIBC_DIR)/include/libc \
+					 $(LIBC_DIR)/include/spec/x86_64/libc \
+					 $(LIBC_DIR)/include/spec/x86/libc \
+					 $(LIBC_DIR)/include/libc \
+					 $(LIBC_DIR)/include/spec/x86_64/libc \
+					 $(LIBC_DIR)/include/spec/x86/libc 
+
+
+# Includes from Phantom build system
+
 
 INC_DIR += $(PRG_DIR)
 # TODO : check realpath
 INC_DIR += $(realpath $(PHANTOM_HOME))/include $(realpath $(PHANTOM_HOME))/include/$(ARCH) \
 	$(PHANTOM_HOME)/include/$(ARCH) $(PHANTOM_HOME)/include 
 
+# Phantom arch includes
+INC_DIR += $(realpath $(PHANTOM_HOME))/include $(realpath $(PHANTOM_HOME))/include/$(ARCH) \
+	$(PHANTOM_HOME)/include/$(ARCH) $(PHANTOM_HOME)/include 
+
 # GL
 INC_DIR += $(PHANTOM_HOME)/phantom/gl
 
+# Debug
+
+CC_C_OPT += -g
+CC_C_OPT += -DDEBUG
 
 
-CC_OPT = -DKERNEL
+# Flags and macros from Phantom build system
+
+CC_C_OPT += -std=gnu89
+CC_C_OPT += -DKERNEL
+CC_C_OPT += -DPHANTOM_GENODE
+CC_C_OPT += -DNO_NETWORK
 
 # Workaround
 # phantom/libfreetype/afangles.c
-CC_OPT += -D_JBLEN=32
+# CC_OPT += -D_JBLEN=32
 # phantom/libphantom/unix/fname.c
-CC_OPT += -DARCH_N_TRAPS=32
-CC_OPT += -DARCH_amd64=
+# CC_OPT += -DARCH_N_TRAPS=32
+# CC_OPT += -DARCH_amd64=
 # phantom/libwin/ctl_text_field.c:210:36:
 # CC_OPT += -DCONF_TRUETYPE=0
-CC_OPT += -include $(PHANTOM_HOME)/include/kernel/config.h
+CC_C_OPT += -include $(PHANTOM_HOME)/include/kernel/config.h
 
 # COMMON_FLAGS= $(WARN) $(ARCH_FLAGS) -O0 -g -MD $(DEFINES) $(addprefix -I,$(INCDIRS)) -nostdinc -std=gnu89 -DKERNEL -DARCH_$(ARCH)=1 -DBOARD_$(BOARD)=1 -DBOARD=$(BOARD) \
 #   -include $(realpath $(PHANTOM_HOME))/include/kernel/config.h \

@@ -177,6 +177,5 @@ SRC_LIBWIN = phantom/libwin/w_control.c \
 						 phantom/libwin/fonts/drv_video_8x16ant.fnt.c \
 						 phantom/libwin/fonts/8x11.fnt.c \
 						 phantom/libwin/mice/default_mouse.c
-						#  phantom/libwin/ia32/asm_zbmove.S
 
 SRC_C += $(SRC_LIBWIN) 
