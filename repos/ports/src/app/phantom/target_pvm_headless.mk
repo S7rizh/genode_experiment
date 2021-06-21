@@ -1,7 +1,7 @@
 TARGET = vmonly
 LIBS   += libc posix cxx vfs
 
-# LIBS += ld-sel4
+LIBS += ld-sel4
 
 export PHANTOM_BUILD_DIR = $(BUILD_BASE_DIR)/app/phantom
 
@@ -15,8 +15,8 @@ export PHANTOM_HOME=$(call select_from_ports,phantom)/src/app/phantom
 include $(REP_DIR)/src/app/phantom/phantom_gl.inc
 # phantom/libtuned
 # include $(REP_DIR)/src/app/phantom/phantom_libtuned.inc
-# phantom/libphantom	# Do not need libphantom!
-# include $(REP_DIR)/src/app/phantom/phantom_libphantom.inc
+# phantom/libphantom
+include $(REP_DIR)/src/app/phantom/phantom_libphantom.inc
 # phantom/libwin
 include $(REP_DIR)/src/app/phantom/phantom_libwin.inc
 # phantom/libfreetype
@@ -26,63 +26,71 @@ include $(REP_DIR)/src/app/phantom/phantom_libfreetype.inc
 
 # PVM
 
-SRC_PVM = phantom/vm/exec.c \
-		phantom/vm/syscall_io.c \
-		phantom/vm/backtrace.c \
-		phantom/vm/syscall_sync.c \
-		phantom/vm/refdec.c \
-		phantom/vm/gen_machindep.c \
-		phantom/vm/syscall.c \
-		phantom/vm/json_parse.c \
-		phantom/vm/gdb.c \
-		phantom/vm/vm_sleep.c \
-		phantom/vm/e4c.c \
-		phantom/vm/stacks.c \
-		phantom/vm/wpool.c \
-		phantom/vm/code.c \
-		phantom/vm/root.c \
-		phantom/vm/syscall_net_kernel.c \
-		phantom/vm/vtest.c \
-		phantom/vm/syscall_win.c \
-		phantom/vm/create.c \
-		phantom/vm/load_class.c \
-		phantom/vm/ftype.c \
-		phantom/vm/video_test.c \
-		phantom/vm/syscall_tty.c \
-		phantom/vm/object.c \
-		phantom/vm/alloc.c \
-		phantom/vm/syscall_net_windows.c \
-		phantom/vm/find_class_file.c \
-		phantom/vm/vm_threads.c \
-		phantom/vm/jit.c \
-		phantom/vm/internal.c \
-		phantom/vm/bulk.c \
-		phantom/vm/gc.c \
-		phantom/vm/wpaint.c \
-		phantom/vm/syscall_net.c \
-		phantom/vm/directory.c \
-		phantom/vm/sys/i_stat.c \
-		phantom/vm/sys/i_udp.c \
-		phantom/vm/sys/i_time.c \
-		phantom/vm/sys/i_ui_control.c \
-		phantom/vm/sys/i_io.c \
-		phantom/vm/sys/i_ui_font.c \
-		phantom/vm/sys/i_port.c \
-		phantom/vm/sys/i_http.c \
-		phantom/vm/sys/i_net.c
+SRC_PVM = phantom/vm/pvm_main.c \
+					phantom/libc/strnstrn.c \
+					phantom/vm/exec.c \
+					phantom/vm/syscall_io.c \
+					phantom/vm/backtrace.c \
+					phantom/vm/syscall_sync.c \
+					phantom/vm/refdec.c \
+					phantom/vm/gen_machindep.c \
+					phantom/vm/syscall.c \
+					phantom/vm/json_parse.c \
+					phantom/vm/gdb.c \
+					phantom/vm/vm_sleep.c \
+					phantom/vm/e4c.c \
+					phantom/vm/stacks.c \
+					phantom/vm/wpool.c \
+					phantom/vm/code.c \
+					phantom/vm/root.c \
+					phantom/vm/syscall_net_kernel.c \
+					phantom/vm/vtest.c \
+					phantom/vm/syscall_win.c \
+					phantom/vm/create.c \
+					phantom/vm/load_class.c \
+					phantom/vm/ftype.c \
+					phantom/vm/video_test.c \
+					phantom/vm/syscall_tty.c \
+					phantom/vm/object.c \
+					phantom/vm/alloc.c \
+					phantom/vm/syscall_net_windows.c \
+					phantom/vm/find_class_file.c \
+					phantom/vm/vm_threads.c \
+					phantom/vm/jit.c \
+					phantom/vm/internal.c \
+					phantom/vm/bulk.c \
+					phantom/vm/gc.c \
+					phantom/vm/wpaint.c \
+					phantom/vm/syscall_net.c \
+					phantom/vm/directory.c \
+					phantom/vm/sys/i_stat.c \
+					phantom/vm/sys/i_udp.c \
+					phantom/vm/sys/i_time.c \
+					phantom/vm/sys/i_ui_control.c \
+					phantom/vm/sys/i_io.c \
+					phantom/vm/sys/i_ui_font.c \
+					phantom/vm/sys/i_port.c \
+					phantom/vm/sys/i_http.c \
+					phantom/vm/sys/i_net.c \
+					phantom/vm/win_bulk.c \
+					phantom/vm/headless_screen.c \
+					phantom/vm/unix_hal.c
 
 SRC_C += $(SRC_PVM)
 
-# Isomem
+# Actual pvm_main files
+# HLS_TEST_OBJFILES=pvm_main.o nonstandalone.o win_bulk.o headless_screen.o unix_hal.o unix_hal_unix.o 
+# pvm_headless: pvm_main.o nonstandalone.o $(GLLIB) libphantom_vm.a  $(HLS_TEST_OBJFILES)
 
-# Headless screen first to enable video driver stub
-SRC_C += phantom/vm/headless_screen.c
+PVM_MAIN = phantom/vm/pvm_main.c \
+				   phantom/vm/win_bulk.c \
+				   phantom/vm/headless_screen.c \
+				   phantom/vm/unix_hal.c \
+				   phantom/vm/unix_hal_unix.c \
+				   phantom/vm/nonstandalone.c
 
-# Isomem files
-include $(REP_DIR)/src/app/phantom/phantom_isomem.inc
 
-# entry point
-SRC_C += phantom/isomem/main.c 
+SRC_C += $(PVM_MAIN)
 
 vpath %.c $(PHANTOM_HOME)
 
