@@ -1,4 +1,4 @@
-TARGET = vmonly
+TARGET = isomem
 LIBS   += libc posix cxx vfs
 
 # LIBS += ld-sel4

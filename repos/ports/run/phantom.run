@@ -44,7 +44,7 @@ create_boot_directory
 		<provides> <service name="Timer" /> </provides>
 	</start>
 
-   <start name="vmonly" caps="500">
+   <start name="isomem" caps="500">
      <resource name="RAM" quantum="500M"/>
      <config verbose="yes" ld_verbose="yes">
        <libc stdout="/dev/log" stderr="/dev/log" />
@@ -75,7 +75,7 @@ set boot_modules {
   vfs.lib.so
   libm.lib.so
   posix.lib.so
-  vmonly
+  isomem
   phantom_bins.tar
 }
 build_boot_image $boot_modules
