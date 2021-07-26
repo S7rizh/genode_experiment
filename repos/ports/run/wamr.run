@@ -47,10 +47,10 @@ import_from_depot [depot_user]/src/[base_src] \
    <start name="iwasm" caps="500">
      <resource name="RAM" quantum="500M"/>
      <config>
-       <libc stdout="/dev/log" stderr="/dev/log" />
+       <libc stdin="/dev/null" stdout="/dev/log" stderr="/dev/log" />
         <vfs>
-	  <rom name="app.wasm" />
-          <dir name="dev"> <log/> </dir>
+	  <tar name="app.wasm.tar" />
+          <dir name="dev"> <null/> <log/> </dir>
         </vfs>
      </config>
    </start>
@@ -69,6 +69,7 @@ set boot_modules {
   posix.lib.so
   iwasm
   app.wasm
+  app.wasm.tar
 }
 build_boot_image $boot_modules
 
