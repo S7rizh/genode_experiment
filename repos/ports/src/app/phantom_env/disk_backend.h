@@ -29,28 +29,6 @@ protected:
     Block::Session::Info _info{_session.info()};
     Genode::Mutex _session_mutex{};
 
-    // Seem to be required by block server. Probably not needed in VFS block server
-
-    void _ack_avail() {}
-    void _ready_to_submit() {}
-    void _timeout() {}
-
-    Genode::Entrypoint &_ep{_env.ep()};
-    Genode::Io_signal_handler<Disk_backend> _disp_ack{_env.ep(), *this, &Disk_backend::_ack_avail};
-    Genode::Io_signal_handler<Disk_backend> _disp_submit{_env.ep(), *this, &Disk_backend::_ready_to_submit};
-    Genode::Io_signal_handler<Disk_backend> _disp_timeout{_env.ep(), *this, &Disk_backend::_timeout};
-
-    // Wait for a packet on EP
-
-    bool _handle = false;
-
-    void _handle_signal()
-    {
-        _handle = true;
-        while (_handle)
-            _ep.wait_and_dispatch_one_io_signal();
-    }
-
     void _sync()
     {
         using Block::Session;
@@ -70,10 +48,6 @@ public:
 
     Disk_backend(Genode::Env &env, Genode::Heap &heap) : _env(env), _heap(heap)
     {
-        // IO event handlers
-        // _session.tx_channel()->sigh_ack_avail(_disp_ack);
-        // _session.tx_channel()->sigh_ready_to_submit(_disp_submit);
-
         log("block device with block size ", _info.block_size, " block count ",
             _info.block_count, " writeable=", _info.writeable);
         log("");
@@ -89,14 +63,17 @@ public:
         _sync();
     }
 
+    /*
+    * Offset and length should be block aligned. Otherwise they may be cropped.
+    *
+    * XXX : 0 offset and 0 length may lead to qemu AHCI error
+    * `qemu-system-x86_64: ahci: PRDT length for NCQ command (0x1) is smaller than the requested size (0x2000000)`
+    */
     bool submit(Operation op, bool sync_req, int64_t offset, size_t length, void *data)
     {
         using namespace Block;
 
         Genode::Mutex::Guard guard(_session_mutex);
-
-        // while (!_session.tx()->ready_to_submit())
-        //     _handle_signal();
 
         Block::Packet_descriptor::Opcode opcode;
 
@@ -123,6 +100,7 @@ public:
             log("Block: cnt=", packet.block_count());
             log("       num=", packet.block_number());
             log("       off=", packet.offset());
+            // It is ok for the offset not to be equal to the defined one
 
             /* out packet -> copy data */
             if (opcode == Block::Packet_descriptor::WRITE)
@@ -135,11 +113,6 @@ public:
             Genode::error("I/O back end: Packet allocation failed!");
             return false;
         }
-
-        /* wait and process result */
-        // while (!_session.tx()->ack_avail())
-        // {
-        // }
 
         Block::Packet_descriptor packet = _session.tx()->get_acked_packet();
 

@@ -157,7 +157,7 @@ void Phantom::test_block_device(Phantom::Disk_backend &disk)
 
 void Component::construct(Genode::Env &env)
 {
-	log("--- nested region map test ---");
+	log("--- Phantom env test ---");
 
 	{
 		/*
@@ -198,5 +198,5 @@ void Component::construct(Genode::Env &env)
 		 */
 	}
 
-	log("--- finished nested region map test ---");
+	log("--- finished Phantom env test ---");
 }
