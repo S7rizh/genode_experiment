@@ -1,5 +1,5 @@
 assert_spec x86
-assert_spec linux
+assert_spec nova
 
 set use_linux [have_spec linux]
 
@@ -98,22 +98,22 @@ append config {
 	</start>
 }
 
-# append_if [expr !$use_linux] config {
-# 	<start name="ahci_drv">
-# 		<resource name="RAM" quantum="10M" />
-# 		<provides><service name="Block" /></provides>
-# 		<config>
-# 			<report ports="yes"/>
-# 			<!-- CAUTION setting writeable! -->
-# 			<policy label_prefix="part_block0" device="0" writeable="yes"/>
-# 			<policy label_prefix="part_block1" device="1" writeable="yes"/>
-# 		</config>
-# 		<route>
-# 			<service name="Report"><child name="block_report_rom"/></service>
-# 			<any-service> <parent/> <any-child /> </any-service>
-# 		</route>
-# 	</start>
-# }
+append_if [expr !$use_linux] config {
+	<start name="ahci_drv">
+		<resource name="RAM" quantum="10M" />
+		<provides><service name="Block" /></provides>
+		<config>
+			<report ports="yes"/>
+			<!-- CAUTION setting writeable! -->
+			<policy label_prefix="part_block0" device="0" writeable="yes"/>
+			<policy label_prefix="part_block1" device="1" writeable="yes"/>
+		</config>
+		<route>
+			<service name="Report"><child name="block_report_rom"/></service>
+			<any-service> <parent/> <any-child /> </any-service>
+		</route>
+	</start>
+}
 
 append_if $use_linux config {
 	<start name="lx_block0" ld="no">
@@ -139,21 +139,68 @@ append config {
 		<config io_buffer="2M">
 			<report partitions="yes"/>
 			<policy label="phantom_env_test -> " partition="1" writeable="yes"/>
-			<policy label="test-part0 -> " partition="1" writeable="yes"/>
+		</config>
+	</start>
+	<start name="part_block1">
+		<binary name="part_block"/>
+		<resource name="RAM" quantum="10M" />
+		<provides><service name="Block" /></provides>
+		<route>
+			<service name="Report"><child name="block_report_rom"/></service>}
+			append config "
+			<service name=\"Block\"><child name=\"$drv1\"/></service>"
+			append config {
+			<any-service><parent/><any-child/></any-service>
+		</route>
+		<config io_buffer="2M">
+			<report partitions="yes"/>
+			<policy label="block_tester1 -> " partition="1" writeable="yes"/>
+			<policy label="test-part1 -> " partition="2" writeable="yes" />
+			<policy label="phantom_env_test -> " partition="2" writeable="yes"/>
 		</config>
 	</start>
 }
 
+# append config {
+# 	<start name="test-part0">
+# 		<binary name="test-block-client" />
+# 		<resource name="RAM" quantum="32M" />
+# 		<config test_size="64M" />
+# 		<route>
+#  			<service name="Block"><child name="part_block0"/></service>
+# 			<any-service> <parent/> <any-child /> </any-service>
+# 		</route>
+# 	</start>
+# }
+# 
+# append config {
+# 	<start name="test-part1">
+# 		<binary name="test-block-client" />
+# 		<resource name="RAM" quantum="32M" />
+# 		<config test_size="64M" />
+# 		<route>
+# 			<service name="Block"><child name="part_block1"/></service>
+# 			<any-service> <parent/> <any-child /> </any-service>
+# 		</route>
+# 	</start>
+# }
+
+
+
+
 append config {
-	<start name="phantom_env_test" caps="500">
+	<start name="phantom_env_test">
 		<resource name="RAM" quantum="32M" />
 		<route>
-			<service name="Block"><child name="part_block0"/></service>
+			<service name="Block"><child name="part_block1"/></service>
 			<any-service> <parent/> <any-child /> </any-service>
 		</route>
 	</start>
+}
 
-</config>}
+append config {
+</config>
+}
 
 # <start name="phantom_env_test>
 # </start>
@@ -183,10 +230,15 @@ append_platform_drv_boot_modules
 build_boot_image $boot_modules
 
 append qemu_args " -nographic -m 512 -nographic"
+
 append qemu_args " -drive id=disk,file=bin/block0.raw,format=raw,if=none \
                    -drive id=disk2,file=bin/block1.raw,format=raw,if=none \
                    -device ahci,id=ahci -device ide-hd,drive=disk,bus=ahci.0 \
                    -device ide-hd,drive=disk2,bus=ahci.1 -boot d"
+
+# append qemu_args " -drive id=disk,file=bin/block0.raw,format=raw,if=none \
+#                    -device ahci,id=ahci -device ide-hd,drive=disk,bus=ahci.0 \
+# 				   -boot d"
 
 run_genode_until {.*--- all tests finished ---.*\n} 360
 set serial_id [output_spawn_id]
@@ -194,4 +246,4 @@ run_genode_until {.*--- all tests finished ---.*\n} 360 $serial_id
 run_genode_until {.*--- all tests finished ---.*\n} 360 $serial_id
 run_genode_until {.*--- all tests finished ---.*\n} 360 $serial_id
 
-# exec rm -f bin/block0.raw bin/block1.raw
+exec rm -f bin/block0.raw bin/block1.raw

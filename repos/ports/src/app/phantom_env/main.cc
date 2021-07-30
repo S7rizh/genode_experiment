@@ -111,11 +111,11 @@ void Phantom::test_obj_space(addr_t const addr_obj_space)
 struct Phantom::Main
 {
 	Env &_env;
-	Heap _heap;
+	Heap _heap{_env.ram(), _env.rm()};
 
-	Phantom::Disk_backend _disk;
+	Phantom::Disk_backend _disk{_env, _heap};
 
-	Main(Env &env) : _env(env), _heap(_env.ram(), _env.rm()), _disk(_env, _heap)
+	Main(Env &env) : _env(env)
 	{
 	}
 };
@@ -124,19 +124,25 @@ struct Phantom::Main
 
 void Phantom::test_block_device(Phantom::Disk_backend &disk)
 {
-	char buffer[256] = {0};
+	char buffer[512] = {0};
 	char test_word[] = "Hello, World!";
+	bool success = false;
 
 	// Write then read
 
 	memcpy(buffer, test_word, strlen(test_word));
 
-	disk.submit(Disk_backend::Operation::WRITE, true, 256, 256, buffer);
+	log("Writing to the disk");
+	success = disk.submit(Disk_backend::Operation::WRITE, true, 1024, 512, buffer);
+	log("Competed write (", success, ")");
 
-	memset(buffer, 0x0, 256);
+	memset(buffer, 0x0, 512);
 
-	disk.submit(Disk_backend::Operation::READ, false, 256, 256, buffer);
+	log("Reading from the disk");
+	success = disk.submit(Disk_backend::Operation::READ, false, 1024, 512, buffer);
+	log("Competed read (", success, ")");
 
+	log("Comparing results");
 	if (strcmp(buffer, test_word) == 0)
 	{
 		log("Single write-read test was successfully passed!");
@@ -145,6 +151,8 @@ void Phantom::test_block_device(Phantom::Disk_backend &disk)
 	{
 		log("Single write-read test was failed!");
 	}
+
+	log("Done!");
 }
 
 void Component::construct(Genode::Env &env)
@@ -169,18 +177,25 @@ void Component::construct(Genode::Env &env)
 		// log(" region top        ",
 		// 	Hex_range<addr_t>(addr_obj_space, rm_obj_space_client.size()));
 
+		Phantom::test_obj_space(addr_obj_space);
+
 		/*
 		 * Setup Main object and disk backend
 		 */
+		try
+		{
 
-		static Phantom::Main main(env);
+			static Phantom::Main main(env);
+			Phantom::test_block_device(main._disk);
+		}
+		catch (Genode::Service_denied)
+		{
+			error("opening block session was denied!");
+		}
 
 		/*
 		 * Tests
 		 */
-
-		Phantom::test_block_device(main._disk);
-		Phantom::test_obj_space(addr_obj_space);
 	}
 
 	log("--- finished nested region map test ---");
