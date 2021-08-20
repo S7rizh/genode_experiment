@@ -169,6 +169,13 @@ append config {
 append config {
 	<start name="phantom_env_test">
 		<resource name="RAM" quantum="32M" />
+		<config ld_verbose="yes">
+			<vfs>
+				<dir name="dev"> <log/> <terminal/> </dir>
+				<dir name="tmp"> <ram/> </dir>
+			</vfs>
+			<libc stdin="/dev/log" stdout="/dev/log" stderr="/dev/log"/>
+		</config>
 		<route>
 			<service name="Block"><child name="part_block1"/></service>
 			<any-service> <parent/> <any-child /> </any-service>

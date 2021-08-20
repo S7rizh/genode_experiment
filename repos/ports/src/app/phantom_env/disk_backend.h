@@ -11,6 +11,11 @@
 #include <base/allocator_avl.h>
 #include <base/log.h>
 
+namespace Phantom
+{
+    class Disk_backend;
+};
+
 /**
  * Block session connection
  * 
@@ -48,13 +53,13 @@ public:
 
     Disk_backend(Genode::Env &env, Genode::Heap &heap) : _env(env), _heap(heap)
     {
-        log("block device with block size ", _info.block_size, " block count ",
-            _info.block_count, " writeable=", _info.writeable);
-        log("");
+        Genode::log("block device with block size ", _info.block_size, " block count ",
+                    _info.block_count, " writeable=", _info.writeable);
+        Genode::log("");
     }
 
-    uint64_t block_count() const { return _info.block_count; }
-    size_t block_size() const { return _info.block_size; }
+    Genode::uint64_t block_count() const { return _info.block_count; }
+    Genode::size_t block_size() const { return _info.block_size; }
     bool writable() const { return _info.writeable; }
 
     void sync()
@@ -69,7 +74,7 @@ public:
     * XXX : 0 offset and 0 length may lead to qemu AHCI error
     * `qemu-system-x86_64: ahci: PRDT length for NCQ command (0x1) is smaller than the requested size (0x2000000)`
     */
-    bool submit(Operation op, bool sync_req, int64_t offset, size_t length, void *data)
+    bool submit(Operation op, bool sync_req, Genode::int64_t offset, Genode::size_t length, void *data)
     {
         using namespace Block;
 
@@ -97,9 +102,9 @@ public:
                                             opcode, offset / _info.block_size,
                                             length / _info.block_size);
 
-            log("Block: cnt=", packet.block_count());
-            log("       num=", packet.block_number());
-            log("       off=", packet.offset());
+            Genode::log("Block: cnt=", packet.block_count());
+            Genode::log("       num=", packet.block_number());
+            Genode::log("       off=", packet.offset());
             // It is ok for the offset not to be equal to the defined one
 
             /* out packet -> copy data */
@@ -133,9 +138,5 @@ public:
         return succeeded;
     }
 };
-
-extern "C"
-{
-}
 
 #endif

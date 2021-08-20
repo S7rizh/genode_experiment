@@ -10,7 +10,7 @@ SRC_ISOMEM = phantom/isomem/khash.c \
             phantom/isomem/genode_credentials.c \
             phantom/isomem/genode_timer.c \
             phantom/isomem/vm_connect.c \
-            phantom/isomem/genode_paging.c \
+            phantom/isomem/genode_vmem.c \
             phantom/isomem/test_switch.c \
             phantom/isomem/vm_load.c \
             phantom/isomem/fs_map.c \
@@ -32,7 +32,7 @@ SRC_ISOMEM = phantom/isomem/khash.c \
             phantom/isomem/ide_io.c \
             phantom/isomem/genode_user_trap.c \
             phantom/isomem/hal.c \
-            phantom/isomem/unix_threads.c \
+            phantom/isomem/genode_threads.c \
             phantom/isomem/fsck.c \
             phantom/isomem/net_timer.c \
             phantom/isomem/unix_sys.c \
