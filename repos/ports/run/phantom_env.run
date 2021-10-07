@@ -35,6 +35,7 @@ set build_components {
 	server/part_block
 	test/block/client
 	app/phantom_env
+	app/phantom
 }
 
 source ${genode_dir}/repos/base/run/platform_drv.inc

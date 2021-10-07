@@ -1,5 +1,5 @@
 TARGET = isomem
-LIBS   += libc posix cxx vfs
+LIBS   += posix cxx vfs
 
 # LIBS += ld-sel4
 
@@ -23,6 +23,14 @@ include $(REP_DIR)/src/app/phantom/phantom_libwin.inc
 include $(REP_DIR)/src/app/phantom/phantom_libfreetype.inc
 # phantom/libc
 # include $(REP_DIR)/src/app/phantom/phantom_libc.inc
+
+# Phantom Genode Env
+
+include $(REP_DIR)/src/app/phantom/phantom_genode_env.inc
+
+# Also disabling isomem stubs
+
+# CC_C_OPT += -DPHANTOM_THREADS_IMP
 
 # PVM
 
@@ -82,7 +90,9 @@ SRC_C += phantom/vm/headless_screen.c
 include $(REP_DIR)/src/app/phantom/phantom_isomem.inc
 
 # entry point
-SRC_C += phantom/isomem/main.c 
+
+# SRC_C += phantom/isomem/main.c 
+# SRC_CC = $(call select_from_ports,phantom)/src/app/phantom/genode_env/main.cc
 
 vpath %.c $(PHANTOM_HOME)
 
@@ -133,6 +143,12 @@ CC_C_OPT += -std=gnu89
 CC_C_OPT += -DKERNEL
 CC_C_OPT += -DPHANTOM_GENODE
 CC_C_OPT += -DNO_NETWORK
+
+# Define macros in CC files as well
+
+CC_OPT += -DKERNEL
+CC_OPT += -DPHANTOM_GENODE
+CC_OPT += -DNO_NETWORK
 
 # Workaround
 # phantom/libfreetype/afangles.c

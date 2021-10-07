@@ -72,6 +72,7 @@ struct Phantom::PhantomThread : PhantomGenericThread
 
     void entry() override
     {
+        Genode::log("Entered a new thread!");
         _thread_entry();
     }
 

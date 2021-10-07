@@ -16,6 +16,8 @@
 #include "phantom_vmem.h"
 #include "phantom_threads.h"
 
+#include "phantom_entrypoints.h"
+
 void Phantom::test_obj_space(addr_t const addr_obj_space)
 {
 
@@ -122,6 +124,15 @@ void Component::construct(Genode::Env &env)
 		{
 			error("opening block session was denied!");
 		}
+
+		/*
+		* Starting Phantom
+		*/
+
+		int p_argc = 1;
+		char **p_argv = nullptr;
+		char **p_envp = nullptr;
+		phantom_main_entry_point(p_argc, p_argv, p_envp);
 
 		/*
 		 * Tests

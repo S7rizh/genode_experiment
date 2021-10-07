@@ -1,8 +1,9 @@
 SRC_ISOMEM = phantom/isomem/khash.c \
             phantom/isomem/udp_json.c \
             phantom/isomem/vm_cn_stats.c \
-            phantom/isomem/unix_hal_sync.c \
+            phantom/isomem/genode_sync.c \
             phantom/isomem/pool.c \
+            phantom/isomem/genode_unsorted.c \
             phantom/isomem/unix_hal.c \
             phantom/isomem/temp_loader_misc.c \
             phantom/isomem/test_mem.c \
@@ -44,7 +45,6 @@ SRC_ISOMEM = phantom/isomem/khash.c \
             phantom/isomem/debug_misc.c \
             phantom/isomem/driver_pci_intel_etc.c \
             phantom/isomem/genode_kunix.c \
-            phantom/isomem/unix_hal_unix.c \
             phantom/isomem/test_pool.c \
             phantom/isomem/vm_cn_url.c \
             phantom/isomem/genode_misc.c \
