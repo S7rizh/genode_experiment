@@ -38,6 +38,7 @@ SRC_ISOMEM = phantom/isomem/khash.c \
             phantom/isomem/net_timer.c \
             phantom/isomem/unix_sys.c \
             phantom/isomem/disk.c \
+            phantom/isomem/genode_disk.c \
             phantom/isomem/json_write.c \
             phantom/isomem/color.c \
             phantom/isomem/test_misc.c \
@@ -67,7 +68,6 @@ SRC_ISOMEM = phantom/isomem/khash.c \
             phantom/isomem/genode_net.c \
             phantom/isomem/genode_intrdisp.c \
             phantom/isomem/init.c \
-            phantom/isomem/vm_cn_udp.c \
-            phantom/isomem/genode_disk.c
+            phantom/isomem/vm_cn_udp.c
 
 SRC_C += $(SRC_ISOMEM)
