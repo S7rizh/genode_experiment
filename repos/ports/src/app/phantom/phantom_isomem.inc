@@ -2,6 +2,7 @@ SRC_ISOMEM = phantom/isomem/khash.c \
             phantom/isomem/udp_json.c \
             phantom/isomem/vm_cn_stats.c \
             phantom/isomem/genode_sync.c \
+            phantom/isomem/wired_spin.c \
             phantom/isomem/pool.c \
             phantom/isomem/genode_unsorted.c \
             phantom/isomem/unix_hal.c \
