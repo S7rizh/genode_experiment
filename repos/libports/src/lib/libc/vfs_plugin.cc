@@ -554,15 +554,15 @@ struct Sync
 		case Sync::INITIAL:
 			if (!vfs_handle.fs().update_modification_timestamp(&vfs_handle, mtime))
 				return false;
-			state = Sync::TIMESTAMP_UPDATED; [[ fallthrough ]]
+			state = Sync::TIMESTAMP_UPDATED; [[ fallthrough ]];
 		case Sync::TIMESTAMP_UPDATED:
 			if (!vfs_handle.fs().queue_sync(&vfs_handle))
 				return false;
-			state = Sync::QUEUED; [[ fallthrough ]]
+			state = Sync::QUEUED; [[ fallthrough ]];
 		case Sync::QUEUED:
 			if (vfs_handle.fs().complete_sync(&vfs_handle) == Vfs::File_io_service::SYNC_QUEUED)
 				return false;
-			state = Sync::COMPLETE; [[ fallthrough ]]
+			state = Sync::COMPLETE; [[ fallthrough ]];
 		case Sync::COMPLETE:
 			break;
 		}
@@ -1173,22 +1173,29 @@ Libc::Vfs_plugin::_ioctl_dio(File_descriptor *fd, unsigned long request, char *a
 Libc::Vfs_plugin::Ioctl_result
 Libc::Vfs_plugin::_ioctl_sndctl(File_descriptor *fd, unsigned long request, char *argp)
 {
-	if (!argp)
-		return { true, EINVAL };
-
 	bool handled = false;
 	/*
 	 * Initialize to "success" and any ioctl is required to set
 	 * in case of error.
 	 *
 	 * This method will either return handled equals true if the I/O control
-	 * was handled successfully or failed and the result is not successfull
+	 * was handled successfully or failed and the result is not successful
 	 * (see the end of this method).
 	 * 
 	 */
 	int result = 0;
 
-	if (request == SNDCTL_DSP_CHANNELS) {
+	if (request == OSS_GETVERSION) {
+
+		if (!argp) return { true, EINVAL };
+
+		*(int *)argp = SOUND_VERSION;
+
+		handled = true;
+
+	} else if (request == SNDCTL_DSP_CHANNELS) {
+
+		if (!argp) return { true, EINVAL };
 
 		monitor().monitor([&] {
 			_with_info(*fd, [&] (Xml_node info) {
@@ -1203,7 +1210,7 @@ Libc::Vfs_plugin::_ioctl_sndctl(File_descriptor *fd, unsigned long request, char
 					return;
 				}
 
-				int const num_chans = *(int const*)argp;
+				int const num_chans = *(int const *)argp;
 				if (num_chans < 0) {
 					result = EINVAL;
 					return;
@@ -1214,7 +1221,7 @@ Libc::Vfs_plugin::_ioctl_sndctl(File_descriptor *fd, unsigned long request, char
 					return;
 				}
 
-				*(int*)argp = avail_chans;
+				*(int *)argp = avail_chans;
 
 				handled = true;
 			});
@@ -1222,7 +1229,41 @@ Libc::Vfs_plugin::_ioctl_sndctl(File_descriptor *fd, unsigned long request, char
 			return Fn::COMPLETE;
 		});
 
-	} else if (request == SNDCTL_DSP_GETOSPACE) {
+	} else if (request == SNDCTL_DSP_CURRENT_OPTR) {
+
+		if (!argp) return { true, EINVAL };
+
+		monitor().monitor([&] {
+			_with_info(*fd, [&] (Xml_node info) {
+
+				if (info.type() != "oss") {
+					return;
+				}
+
+				long long const optr_samples =
+					info.attribute_value("optr_samples", -1L);
+				int const optr_fifo_samples =
+					info.attribute_value("optr_fifo_samples", -1L);
+				if ((optr_samples == -1) || (optr_fifo_samples == -1)) {
+					result = ENOTSUP;
+					return;
+				}
+
+				oss_count_t *optr = (oss_count_t *)argp;
+				optr->samples      = optr_samples;
+				optr->fifo_samples = optr_fifo_samples;
+
+				handled = true;
+			});
+
+			return Fn::COMPLETE;
+		});
+
+	} else if (request == SNDCTL_DSP_GETERROR) {
+
+		if (!argp) return { true, EINVAL };
+
+		int play_underruns = 0;
 
 		monitor().monitor([&] {
 			_with_info(*fd, [&] (Xml_node info) {
@@ -1230,34 +1271,171 @@ Libc::Vfs_plugin::_ioctl_sndctl(File_descriptor *fd, unsigned long request, char
 					return;
 				}
 
-				unsigned int const frag_size =
-					info.attribute_value("frag_size", 0U);
-				unsigned int const frag_avail =
-					info.attribute_value("frag_avail", 0U);
-				if (!frag_avail || !frag_size) {
-					result = ENOTSUP;
+				play_underruns = info.attribute_value("play_underruns", 0U);
+			});
+
+			return Fn::COMPLETE;
+		});
+
+
+		if (play_underruns > 0) {
+
+			/* reset */
+
+			char const play_underruns_string[] = "0";
+			Absolute_path play_underruns_path = ioctl_dir(*fd);
+			play_underruns_path.append_element("play_underruns");
+			File_descriptor *play_underruns_fd = open(play_underruns_path.base(), O_RDWR);
+			if (!play_underruns_fd)
+				return { true, ENOTSUP };
+			write(play_underruns_fd, play_underruns_string, sizeof(play_underruns_string));
+			close(play_underruns_fd);
+		}
+
+		struct audio_errinfo *err_info =
+			(struct audio_errinfo *)argp;
+
+		err_info->play_underruns  = play_underruns;
+		err_info->rec_overruns    = 0;
+		err_info->play_ptradjust  = 0;
+		err_info->rec_ptradjust   = 0;
+		err_info->play_errorcount = 0;
+		err_info->rec_errorcount  = 0;
+		err_info->play_lasterror  = 0;
+		err_info->rec_lasterror   = 0;
+		err_info->play_errorparm  = 0;
+		err_info->rec_errorparm   = 0;
+
+		handled = true;
+
+	} else if (request == SNDCTL_DSP_GETFMTS) {
+
+		if (!argp) return { true, EINVAL };
+
+		monitor().monitor([&] {
+			_with_info(*fd, [&] (Xml_node info) {
+				if (info.type() != "oss") {
 					return;
 				}
 
-				int const fragsize  = (int)frag_size;
-				int const fragments = (int)frag_avail;
-				if (fragments < 0 || fragsize < 0) {
+				unsigned int const format =
+					info.attribute_value("format", 0U);
+				if (format == 0U) {
 					result = EINVAL;
 					return;
 				}
 
-				struct audio_buf_info *buf_info =
-					(struct audio_buf_info*)argp;
-
-				buf_info->fragments = fragments;
-				buf_info->fragsize  = fragsize;
-				buf_info->bytes     = fragments * fragsize;
+				*(int *)argp = format;
 
 				handled = true;
 			});
 
 			return Fn::COMPLETE;
 		});
+
+	} else if (request == SNDCTL_DSP_GETISPACE) {
+
+		if (!argp) return { true, EINVAL };
+
+		/* dummy implementation */
+
+		audio_buf_info &abinfo = *(audio_buf_info *)argp;
+		abinfo = {
+			.fragments  = 4,
+			.fragstotal = 256,
+			.fragsize   = 2048,
+			.bytes      = 4*2048,
+		};
+
+		handled = true;
+
+	} else if (request == SNDCTL_DSP_GETOPTR) {
+
+		if (!argp) return { true, EINVAL };
+
+		/* dummy implementation */
+
+		count_info &ci = *(count_info *)argp;
+		ci = {
+			.bytes  = 0, /* Total # of bytes processed */
+			.blocks = 0, /* # of fragment transitions since last time */
+			.ptr    = 0, /* Current DMA pointer value */
+		};
+
+		handled = true;
+
+	} else if (request == SNDCTL_DSP_GETOSPACE) {
+
+		if (!argp) return { true, EINVAL };
+
+		monitor().monitor([&] {
+			_with_info(*fd, [&] (Xml_node info) {
+				if (info.type() != "oss") {
+					return;
+				}
+
+				unsigned int const ofrag_size =
+					info.attribute_value("ofrag_size", 0U);
+				unsigned int const ofrag_avail =
+					info.attribute_value("ofrag_avail", 0U);
+				unsigned int const ofrag_total =
+					info.attribute_value("ofrag_total", 0U);
+				if (!ofrag_size || !ofrag_total) {
+					result = ENOTSUP;
+					return;
+				}
+
+				int const fragments  = (int)ofrag_avail;
+				int const fragstotal = (int)ofrag_total;
+				int const fragsize   = (int)ofrag_size;
+				if (fragments < 0 || fragstotal < 0 || fragsize < 0) {
+					result = EINVAL;
+					return;
+				}
+
+				struct audio_buf_info *buf_info =
+					(struct audio_buf_info *)argp;
+
+				buf_info->fragments  = fragments;
+				buf_info->fragstotal = fragstotal;
+				buf_info->fragsize   = fragsize;
+				buf_info->bytes      = fragments * fragsize;
+
+				handled = true;
+			});
+
+			return Fn::COMPLETE;
+		});
+
+	} else if (request == SNDCTL_DSP_GETPLAYVOL) {
+
+		if (!argp) return { true, EINVAL };
+
+		/* dummy implementation */
+
+		int *vol = (int *)argp;
+
+		*vol = 100;
+
+		handled = true;
+
+	} else if (request == SNDCTL_DSP_LOW_WATER) {
+
+		if (!argp) return { true, EINVAL };
+
+		/* dummy implementation */
+
+		int *val = (int *)argp;
+
+		*val = 0;
+
+		handled = true;
+
+	} else if (request == SNDCTL_DSP_NONBLOCK) {
+
+		/* dummy implementation */
+
+		handled = true;
 
 	} else if (request == SNDCTL_DSP_POST) {
 
@@ -1266,8 +1444,11 @@ Libc::Vfs_plugin::_ioctl_sndctl(File_descriptor *fd, unsigned long request, char
 	} else if (request == SNDCTL_DSP_RESET) {
 
 		handled = true;
+		warning("SNDCTL_DSP_RESET handled=", handled, " result=", result);
 
 	} else if (request == SNDCTL_DSP_SAMPLESIZE) {
+
+		if (!argp) return { true, EINVAL };
 
 		monitor().monitor([&] {
 			_with_info(*fd, [&] (Xml_node info) {
@@ -1282,7 +1463,7 @@ Libc::Vfs_plugin::_ioctl_sndctl(File_descriptor *fd, unsigned long request, char
 					return;
 				}
 
-				int const requested_fmt = *(int const*)argp;
+				int const requested_fmt = *(int const *)argp;
 
 				if (requested_fmt != (int)format) {
 					result = ENOTSUP;
@@ -1297,34 +1478,86 @@ Libc::Vfs_plugin::_ioctl_sndctl(File_descriptor *fd, unsigned long request, char
 
 	} else if (request == SNDCTL_DSP_SETFRAGMENT) {
 
+		if (!argp) return { true, EINVAL };
+
+		int *frag = (int *)argp;
+		int max_fragments = *frag >> 16;
+		int size_selector = *frag & ((1<<16) - 1);
+
+		char ofrag_total_string[16];
+		char ofrag_size_string[16];
+
+		::snprintf(ofrag_total_string, sizeof(ofrag_total_string),
+		           "%u", max_fragments);
+
+		::snprintf(ofrag_size_string, sizeof(ofrag_size_string),
+		           "%u", 1 << size_selector);
+
+		Absolute_path ofrag_total_path = ioctl_dir(*fd);
+		ofrag_total_path.append_element("ofrag_total");
+		File_descriptor *ofrag_total_fd = open(ofrag_total_path.base(), O_RDWR);
+		if (!ofrag_total_fd)
+			return { true, ENOTSUP };
+		write(ofrag_total_fd, ofrag_total_string, sizeof(ofrag_total_string));
+		close(ofrag_total_fd);
+
+		Absolute_path ofrag_size_path = ioctl_dir(*fd);
+		ofrag_size_path.append_element("ofrag_size");
+		File_descriptor *ofrag_size_fd = open(ofrag_size_path.base(), O_RDWR);
+		if (!ofrag_size_fd)
+			return { true, ENOTSUP };
+		write(ofrag_size_fd, ofrag_size_string, sizeof(ofrag_size_string));
+		close(ofrag_size_fd);
+
 		monitor().monitor([&] {
+
 			_with_info(*fd, [&] (Xml_node info) {
 				if (info.type() != "oss") {
 					return;
 				}
 
-				unsigned int const frag_size =
-					info.attribute_value("frag_size", 0U);
-				unsigned int const frag_size_log2 =
-					frag_size ? Genode::log2(frag_size) : 0;
+				unsigned int const ofrag_size =
+					info.attribute_value("ofrag_size", 0U);
+				unsigned int const ofrag_size_log2 =
+					ofrag_size ? Genode::log2(ofrag_size) : 0;
 
-				unsigned int const queue_size =
-					info.attribute_value("queue_size", 0U);
+				unsigned int const ofrag_total =
+					info.attribute_value("ofrag_total", 0U);
 
-				if (!queue_size || !frag_size_log2) {
+				if (!ofrag_total || !ofrag_size_log2) {
 					result = ENOTSUP;
 					return;
 				}
-
-				/* ignore the given hint */
-
-				handled = true;
 			});
 
 			return Fn::COMPLETE;
 		});
 
+		handled = true;
+
+	} else if (request == SNDCTL_DSP_SETPLAYVOL) {
+
+		if (!argp) return { true, EINVAL };
+
+		/* dummy implementation */
+
+		int *vol = (int *)argp;
+
+		*vol = 100;
+
+		handled = true;
+
+	} else if (request == SNDCTL_DSP_SETTRIGGER) {
+
+		if (!argp) return { true, EINVAL };
+
+		/* dummy implementation */
+
+		handled = true;
+
 	} else if (request == SNDCTL_DSP_SPEED) {
+
+		if (!argp) return { true, EINVAL };
 
 		monitor().monitor([&] {
 			_with_info(*fd, [&] (Xml_node info) {
@@ -1339,7 +1572,7 @@ Libc::Vfs_plugin::_ioctl_sndctl(File_descriptor *fd, unsigned long request, char
 					return;
 				}
 
-				int const speed = *(int const*)argp;
+				int const speed = *(int const *)argp;
 				if (speed < 0) {
 					result = EINVAL;
 					return;
@@ -1350,7 +1583,7 @@ Libc::Vfs_plugin::_ioctl_sndctl(File_descriptor *fd, unsigned long request, char
 					return;
 				}
 
-				*(int*)argp = samplerate;
+				*(int *)argp = samplerate;
 
 				handled = true;
 			});
@@ -1358,12 +1591,55 @@ Libc::Vfs_plugin::_ioctl_sndctl(File_descriptor *fd, unsigned long request, char
 			return Fn::COMPLETE;
 		});
 
+	} else if (request == SNDCTL_DSP_SYNC) {
+
+		/*
+		 * SNDCTL_DSP_SYNC should be implemented like follows, but we disabled
+		 * the implementation and just return for two reasons. The VirtualBox 6
+		 * backend requires the sync operation to complete with very tight
+		 * timing in a special thread, which our current implementation can't
+		 * assure. Also, the OSS documentation (and examples) advise against the
+		 * use of this feature in new programs.
+		 */
+		if (0) monitor().monitor([&] {
+
+			auto result = Fn::INCOMPLETE;
+
+			_with_info(*fd, [&] (Xml_node info) {
+
+				if (info.type() != "oss") return;
+
+				unsigned int const ofrag_avail =
+					info.attribute_value("ofrag_avail", 0U);
+				unsigned int const ofrag_total =
+					info.attribute_value("ofrag_total", 0U);
+
+				result = (ofrag_avail == ofrag_total ? Fn::COMPLETE : Fn::INCOMPLETE);
+			});
+
+			return result;
+		});
+
+		handled = true;
+
+	} else if (request == SNDCTL_SYSINFO) {
+
+		if (!argp) return { true, EINVAL };
+
+		/* dummy implementation */
+
+		oss_sysinfo *si = (oss_sysinfo *)argp;
+		Genode::memset(si, 0, sizeof(*si));
+
+		handled = true;
 	}
 
 	/*
 	 * Either handled or a failed attempt will mark the I/O control
 	 * as handled.
 	 */
+	if (request == SNDCTL_DSP_RESET)
+		warning("SNDCTL_DSP_RESET handled=", handled, " result=", result);
 	return { handled || result != 0, result };
 }
 
@@ -1383,13 +1659,26 @@ int Libc::Vfs_plugin::ioctl(File_descriptor *fd, unsigned long request, char *ar
 	case DIOCGMEDIASIZE:
 		result = _ioctl_dio(fd, request, argp);
 		break;
+	case OSS_GETVERSION:
 	case SNDCTL_DSP_CHANNELS:
+	case SNDCTL_DSP_CURRENT_OPTR:
+	case SNDCTL_DSP_GETERROR:
+	case SNDCTL_DSP_GETFMTS:
+	case SNDCTL_DSP_GETISPACE:
+	case SNDCTL_DSP_GETOPTR:
 	case SNDCTL_DSP_GETOSPACE:
+	case SNDCTL_DSP_GETPLAYVOL:
+	case SNDCTL_DSP_LOW_WATER:
+	case SNDCTL_DSP_NONBLOCK:
 	case SNDCTL_DSP_POST:
 	case SNDCTL_DSP_RESET:
 	case SNDCTL_DSP_SAMPLESIZE:
 	case SNDCTL_DSP_SETFRAGMENT:
+	case SNDCTL_DSP_SETPLAYVOL:
+	case SNDCTL_DSP_SETTRIGGER:
 	case SNDCTL_DSP_SPEED:
+	case SNDCTL_DSP_SYNC:
+	case SNDCTL_SYSINFO:
 		result = _ioctl_sndctl(fd, request, argp);
 		break;
 	default:
@@ -1397,6 +1686,8 @@ int Libc::Vfs_plugin::ioctl(File_descriptor *fd, unsigned long request, char *ar
 	}
 
 	if (result.handled) {
+		if (result.error)
+			error("XXXXX error=", result.error, " request=", Hex(request), "/", (request==SNDCTL_DSP_RESET?"":"!"), "SNDCTL_DSP_RESET");
 		return result.error ? Errno(result.error) : 0;
 	}
 
@@ -1675,76 +1966,88 @@ int Libc::Vfs_plugin::fsync(File_descriptor *fd)
 
 int Libc::Vfs_plugin::symlink(const char *target_path, const char *link_path)
 {
-	enum class Stage { OPEN, WRITE, SYNC };
-
-	Stage                stage     { Stage::OPEN };
 	Vfs::Vfs_handle     *handle    { nullptr };
 	Constructible<Sync>  sync;
 	Vfs::file_size const count     { ::strlen(target_path) + 1 };
 	Vfs::file_size       out_count { 0 };
 
+	{
+		bool succeeded { false };
+		int result_errno { 0 };
+		monitor().monitor([&] {
 
-	bool succeeded { false };
-	int result_errno { 0 };
-	monitor().monitor([&] {
+			typedef Vfs::Directory_service::Openlink_result Openlink_result;
 
-		switch (stage) {
-		case Stage::OPEN:
-			{
-				typedef Vfs::Directory_service::Openlink_result Openlink_result;
+			Openlink_result openlink_result =
+				_root_fs.openlink(link_path, true, &handle, _alloc);
 
-				Openlink_result openlink_result =
-					_root_fs.openlink(link_path, true, &handle, _alloc);
+			switch (openlink_result) {
+			case Openlink_result::OPENLINK_ERR_LOOKUP_FAILED:
+				result_errno = ENOENT; return Fn::COMPLETE;
+			case Openlink_result::OPENLINK_ERR_NAME_TOO_LONG:
+				result_errno = ENAMETOOLONG; return Fn::COMPLETE;
+			case Openlink_result::OPENLINK_ERR_NODE_ALREADY_EXISTS:
+				result_errno = EEXIST; return Fn::COMPLETE;
+			case Openlink_result::OPENLINK_ERR_NO_SPACE:
+				result_errno = ENOSPC; return Fn::COMPLETE;
+			case Openlink_result::OPENLINK_ERR_OUT_OF_RAM:
+				result_errno = ENOSPC; return Fn::COMPLETE;
+			case Openlink_result::OPENLINK_ERR_OUT_OF_CAPS:
+				result_errno = ENOSPC; return Fn::COMPLETE;
+			case Vfs::Directory_service::OPENLINK_ERR_PERMISSION_DENIED:
+				result_errno = EPERM; return Fn::COMPLETE;
+			case Openlink_result::OPENLINK_OK:
+				break;
+			}
 
-				switch (openlink_result) {
-				case Openlink_result::OPENLINK_ERR_LOOKUP_FAILED:
-					result_errno = ENOENT; return Fn::COMPLETE;
-				case Openlink_result::OPENLINK_ERR_NAME_TOO_LONG:
-					result_errno = ENAMETOOLONG; return Fn::COMPLETE;
-				case Openlink_result::OPENLINK_ERR_NODE_ALREADY_EXISTS:
-					result_errno = EEXIST; return Fn::COMPLETE;
-				case Openlink_result::OPENLINK_ERR_NO_SPACE:
-					result_errno = ENOSPC; return Fn::COMPLETE;
-				case Openlink_result::OPENLINK_ERR_OUT_OF_RAM:
-					result_errno = ENOSPC; return Fn::COMPLETE;
-				case Openlink_result::OPENLINK_ERR_OUT_OF_CAPS:
-					result_errno = ENOSPC; return Fn::COMPLETE;
-				case Vfs::Directory_service::OPENLINK_ERR_PERMISSION_DENIED:
-					result_errno = EPERM; return Fn::COMPLETE;
-				case Openlink_result::OPENLINK_OK:
-					break;
-				}
-
-				handle->handler(&_response_handler);
-				sync.construct(*handle, _update_mtime, _current_real_time);
-			} stage = Stage::WRITE; [[fallthrough]]
-
-		case Stage::WRITE:
-			{
-				try {
-					handle->fs().write(handle, target_path, count, out_count);
-				} catch (Vfs::File_io_service::Insufficient_buffer) {
-					return Fn::INCOMPLETE;
-				}
-			} stage = Stage::SYNC; [[fallthrough]]
-
-		case Stage::SYNC:
-			{
-				if (!sync->complete())
-					return Fn::INCOMPLETE;
-				handle->close();
-			} break;
-		}
-
-		if (out_count != count)
-			result_errno = ENAMETOOLONG;
-		else
+			handle->handler(&_response_handler);
 			succeeded = true;
-		return Fn::COMPLETE;
-	});
+			return Fn::COMPLETE;
+		});
 
-	if (!succeeded)
+		if (!succeeded)
+			return Errno(result_errno);
+	}
+
+	/* must be done outside the monitor because constructor needs libc I/O */
+	sync.construct(*handle, _update_mtime, _current_real_time);
+
+	{
+		bool succeeded { false };
+		int result_errno { 0 };
+		enum class Stage { WRITE, SYNC } stage = Stage::WRITE;
+
+		monitor().monitor([&] {
+
+			switch (stage) {
+
+			case Stage::WRITE:
+				{
+					try {
+						handle->fs().write(handle, target_path, count, out_count);
+					} catch (Vfs::File_io_service::Insufficient_buffer) {
+						return Fn::INCOMPLETE;
+					}
+				} stage = Stage::SYNC; [[fallthrough]];
+
+			case Stage::SYNC:
+				{
+					if (!sync->complete())
+						return Fn::INCOMPLETE;
+					handle->close();
+				} break;
+			}
+
+			if (out_count != count)
+				result_errno = ENAMETOOLONG;
+			else
+				succeeded = true;
+			return Fn::COMPLETE;
+		});
+
+		if (!succeeded)
 		return Errno(result_errno);
+	}
 
 	return 0;
 }
@@ -1787,13 +2090,13 @@ ssize_t Libc::Vfs_plugin::readlink(const char *link_path, char *buf, ::size_t bu
 				}
 
 				handle->handler(&_response_handler);
-			} stage = Stage::QUEUE_READ; [[ fallthrough ]]
+			} stage = Stage::QUEUE_READ; [[ fallthrough ]];
 
 		case Stage::QUEUE_READ:
 			{
 				if (!handle->fs().queue_read(handle, buf_size))
 					return Fn::INCOMPLETE;
-			} stage = Stage::COMPLETE_READ; [[ fallthrough ]]
+			} stage = Stage::COMPLETE_READ; [[ fallthrough ]];
 
 		case Stage::COMPLETE_READ:
 			{
@@ -1946,11 +2249,19 @@ void *Libc::Vfs_plugin::mmap(void *addr_in, ::size_t length, int prot, int flags
 
 	} else if (flags & MAP_SHARED) {
 
-		/* duplicate the file descriptor to keep the file open as long as the mapping exists */
+		/* create another VFS handle to keep the file open as long as the mapping exists */
 
-		Libc::File_descriptor *dup_fd = dup(fd);
+		Vfs::Vfs_handle *reference_handle = nullptr;
+		typedef Vfs::Directory_service::Open_result Result;
+		Result vfs_open_result;
+		monitor().monitor([&] {
+			vfs_open_result = _root_fs.open(fd->fd_path, fd->flags,
+			                                &reference_handle, _alloc);
+			return Fn::COMPLETE;
+		});
 
-		if (!dup_fd) {
+		if (vfs_open_result != Result::OPEN_OK) {
+			error("mmap could not create reference VFS handle");
 			errno = ENFILE;
 			return MAP_FAILED;
 		}
@@ -1964,7 +2275,10 @@ void *Libc::Vfs_plugin::mmap(void *addr_in, ::size_t length, int prot, int flags
 
 		if (!ds_cap.valid()) {
 			Genode::error("mmap got invalid dataspace capability");
-			close(dup_fd);
+			monitor().monitor([&] {
+				reference_handle->close();
+				return Fn::COMPLETE;
+			});
 			errno = ENODEV;
 			return MAP_FAILED;
 		}
@@ -1972,12 +2286,15 @@ void *Libc::Vfs_plugin::mmap(void *addr_in, ::size_t length, int prot, int flags
 		try {
 			addr = region_map().attach(ds_cap, length, offset);
 		} catch (...) {
-			close(dup_fd);
+			monitor().monitor([&] {
+				reference_handle->close();
+				return Fn::COMPLETE;
+			});
 			errno = ENOMEM;
 			return MAP_FAILED;
 		}
 
-		new (_alloc) Mmap_entry(_mmap_registry, addr, dup_fd);
+		new (_alloc) Mmap_entry(_mmap_registry, addr, reference_handle);
 	}
 
 	return addr;
@@ -1994,20 +2311,23 @@ int Libc::Vfs_plugin::munmap(void *addr, ::size_t)
 
 	/* shared mapping */
 
-	Libc::File_descriptor *fd = nullptr;
+	Vfs::Vfs_handle *reference_handle = nullptr;
 
 	_mmap_registry.for_each([&] (Mmap_entry &entry) {
 		if (entry.start == addr) {
-			fd = entry.fd;
+			reference_handle = entry.reference_handle;
 			destroy(_alloc, &entry);
 			region_map().detach(addr);
 		}
 	});
 
-	if (!fd)
+	if (!reference_handle)
 		return Errno(EINVAL);
 
-	close(fd);
+	monitor().monitor([&] {
+		reference_handle->close();
+		return Fn::COMPLETE;
+	});
 
 	return 0;
 }

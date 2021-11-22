@@ -85,13 +85,17 @@ void Popup_dialog::_gen_pkg_elements(Xml_generator &xml,
 		});
 	});
 
-	if (_resources.constructed() && component.affinity_space.total() > 1) {
+	_pd_route.generate(xml);
+
+	if (_resources.constructed()) {
+
 		xml.node("frame", [&] {
 			xml.node("vbox", [&] () {
-				bool const selected = _route_selected(_resources->start_name());
+
+				bool const selected = _route_selected("resources");
 
 				if (!selected)
-					_gen_route_entry(xml, _resources->start_name(),
+					_gen_route_entry(xml, "resources",
 					                 "Resource assignment ...", false, "enter");
 
 				if (selected) {
@@ -302,6 +306,7 @@ void Popup_dialog::click(Action &action)
 
 	_action_item .propose_activation_on_click();
 	_install_item.propose_activation_on_click();
+	_pd_route.click();
 
 	Route::Id const clicked_route = _route_item._hovered;
 
@@ -440,6 +445,23 @@ void Popup_dialog::click(Action &action)
 			if (clicked_route == "back") {
 				_state = PKG_SHOWN;
 				_selected_route.destruct();
+				_pd_route.reset();
+
+			} else if (_resource_dialog_selected()) {
+
+				bool const clicked_on_different_route = clicked_route.valid()
+				                                     && (clicked_route != "");
+				if (clicked_on_different_route) {
+
+					/* close resource dialog */
+					_selected_route.construct(clicked_route);
+
+				} else {
+
+					if (_resources.constructed())
+						action.apply_to_construction([&] (Component &component) {
+							_resources->click(component); });
+				}
 
 			} else {
 
@@ -485,11 +507,9 @@ void Popup_dialog::click(Action &action)
 					_selected_route.construct(clicked_route);
 				}
 
-				if (_resources.constructed()) {
-					action.apply_to_construction([&] (Component &component) {
-						_resources->click(component);
-					});
-				}
+				action.apply_to_construction([&] (Component &component) {
+					_pd_route.click(component);
+				});
 			}
 		}
 	}

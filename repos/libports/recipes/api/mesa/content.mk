@@ -1,4 +1,5 @@
 MIRROR_FROM_REP_DIR := lib/import/import-mesa.mk \
+                       lib/import/import-mesa_api.mk \
                        lib/symbols/egl \
                        lib/symbols/mesa
 
@@ -19,4 +20,4 @@ include:
 content: LICENSE
 
 LICENSE:
-	cp $(PORT_DIR)/src/lib/mesa/docs/COPYING $@
+	cp $(PORT_DIR)/src/lib/mesa/docs/license.rst $@

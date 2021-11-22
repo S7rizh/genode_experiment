@@ -18,7 +18,7 @@
 #include <base/component.h>
 #include <base/session_object.h>
 #include <os/buffered_xml.h>
-#include <os/sandbox.h>
+#include <sandbox/sandbox.h>
 #include <os/dynamic_rom_session.h>
 #include <input/event.h>
 #include <util/utf8.h>
@@ -88,6 +88,12 @@ struct Text_area::Dialog : private Dynamic_rom_session::Xml_producer
 			Position(Line::Index x, Text::Index y) : x(x), y(y) { }
 
 			Position(Position const &other) : x(other.x), y(other.y) { }
+
+			Position &operator = (Position const &other)
+			{
+				x = other.x, y = other.y;
+				return *this;
+			}
 
 			bool operator != (Position const &other) const
 			{

@@ -1,7 +1,7 @@
 TARGET  := usb_hid_drv
 SRC_C   := dummies.c
 SRC_CC  := main.cc lx_emul.cc evdev.cc
-SRC_CC  += printf.cc timer.cc scheduler.cc env.cc work.cc
+SRC_CC  += printf.cc bug.cc timer.cc scheduler.cc env.cc work.cc
 
 LIBS    := base usb_hid_include lx_kit_setjmp
 
@@ -38,4 +38,4 @@ CC_C_OPT += -Wno-unused-but-set-variable -Wno-pointer-sign \
 CC_CXX_WARN_STRICT =
 
 vpath %.c  $(USB_CONTRIB_DIR)
-vpath %.cc $(REP_DIR)/src/lx_kit
+vpath %.cc $(REP_DIR)/src/lib/legacy/lx_kit

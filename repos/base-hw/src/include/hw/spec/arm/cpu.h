@@ -18,6 +18,7 @@
 
 namespace Hw { struct Arm_cpu; }
 
+
 struct Hw::Arm_cpu
 {
 	/***************************************
@@ -204,6 +205,9 @@ struct Hw::Arm_cpu
 
 	/* Branch predictor invalidate all */
 	ARM_CP15_REGISTER_32BIT(Bpimva, c7, c5,  0, 7);
+
+	/* Data Cache Invalidate by MVA to PoC */
+	ARM_CP15_REGISTER_32BIT(Dcimvac, c7, c6, 0, 1);
 
 	/* Data Cache Clean by MVA to PoC */
 	ARM_CP15_REGISTER_32BIT(Dccmvac, c7, c10, 0, 1);

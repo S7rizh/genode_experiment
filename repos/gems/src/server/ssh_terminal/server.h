@@ -61,14 +61,6 @@ struct Ssh::Session : Genode::Registry<Session>::Element
 	Ssh::Terminal *terminal          { nullptr };
 	bool           terminal_detached { false };
 
-	Genode::Mutex  _access_mutex { };
-	Genode::Mutex &mutex_terminal()
-	{
-		return _access_mutex;
-	}
-
-	bool spawn_terminal { false };
-
 	Session(Genode::Registry<Session> &reg,
 	        ssh_session s,
 	        ssh_channel_callbacks ccb,
@@ -96,23 +88,37 @@ struct Ssh::Terminal_session : Genode::Registry<Terminal_session>::Element
 
 	int _fds[2] { -1, -1 };
 
+	enum State { UNINITIALIZED,
+	             PIPE_INITIALIZED,
+	             SSH_INITIALIZED } _state = UNINITIALIZED;
+
 	Terminal_session(Genode::Registry<Terminal_session> &reg,
 	                 Ssh::Terminal &conn,
 	                 ssh_event event_loop);
 
 	~Terminal_session()
 	{
-		ssh_event_remove_fd(_event_loop, _fds[0]);
-		close(_fds[0]);
-		close(_fds[1]);
+		switch (_state) {
+		case SSH_INITIALIZED:
+			ssh_event_remove_fd(_event_loop, _fds[0]);
+			[[fallthrough]];
+		case PIPE_INITIALIZED:
+			close(_fds[0]);
+			close(_fds[1]);
+			[[fallthrough]];
+		case UNINITIALIZED:
+			break;
+		}
 	}
+
+	void initialize_ssh_event_fds();
 };
 
 
 struct Ssh::Terminal_registry : Genode::Registry<Terminal_session>
 {
-	Genode::Mutex _mutex { };
-	Genode::Mutex &mutex() { return _mutex; }
+	Util::Pthread_mutex _mutex { };
+	Util::Pthread_mutex &mutex() { return _mutex; }
 };
 
 
@@ -164,8 +170,9 @@ class Ssh::Server
 		ssh_server_callbacks_struct  _session_cb { };
 		ssh_bind_callbacks_struct    _bind_cb    { };
 
-		Session_registry _sessions   { };
-		uint32_t         _session_id { 0 };
+		Session_registry _sessions     { };
+		Session_registry _new_sessions { };
+		uint32_t         _session_id   { 0 };
 
 		void _initialize_channel_callbacks();
 		void _initialize_session_callbacks();

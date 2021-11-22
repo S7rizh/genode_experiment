@@ -46,9 +46,11 @@ MIRROR_FROM_LIBPORTS := lib/mk/libc-mem.mk \
                         src/lib/libc/libc_mem_alloc.cc \
                         lib/import/import-qemu-usb_include.mk \
                         lib/mk/qemu-usb_include.mk \
-                        lib/mk/qemu-usb.mk \
+                        lib/mk/qemu-usb.inc \
+                        lib/mk/spec/x86_32/qemu-usb.mk \
+                        lib/mk/spec/x86_64/qemu-usb.mk \
                         include/qemu \
-                        src/lib/qemu-usb
+                        src/lib/qemu-usb \
 
 content: $(MIRROR_FROM_LIBPORTS)
 

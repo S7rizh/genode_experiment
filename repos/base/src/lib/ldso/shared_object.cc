@@ -25,22 +25,18 @@ static Linker::Root_object const &to_root(void *h)
 }
 
 
-/**
- * Needed during shared object creation and destruction, since global lists are
- * manipulated
- */
-static Genode::Mutex & shared_object_lock()
-{
-	static Genode::Mutex _lock;
-	return _lock;
-}
-
-
 static Linker::Object *find_obj(Genode::addr_t addr)
 {
-	for (Linker::Object *e = Linker::obj_list_head(); e; e = e->next_obj())
-		if (addr >= e->link_map().addr  && addr < e->link_map().addr + e->size())
-			return e;
+	Linker::Object *elf = 0;
+	Linker::for_each_object([&] (Linker::Object &e) {
+		if (elf) return;
+
+		if (addr >= e.link_map().addr  && addr < e.link_map().addr + e.size())
+			elf = &e;
+	});
+
+	if (elf)
+		return elf;
 
 	throw Genode::Address_info::Invalid_address();
 }
@@ -61,18 +57,22 @@ Genode::Shared_object::Shared_object(Env &env, Allocator &md_alloc,
 		log("LD: open '", file ? file : "binary", "'");
 
 	try {
-		Mutex::Guard guard(shared_object_lock());
+		Mutex::Guard guard(Linker::shared_object_mutex());
 
-		_handle = new (md_alloc)
+		Root_object *root  = new (md_alloc)
 			Root_object(env, md_alloc, file ? file : binary_name(),
 			            bind == BIND_NOW ? Linker::BIND_NOW : Linker::BIND_LAZY,
 			            keep == KEEP     ? Linker::KEEP     : Linker::DONT_KEEP);
 
+		_handle = root;
+
 		/* print loaded object information */
-		try {
-			if (Linker::verbose)
-				Linker::dump_link_map(to_root(_handle).first_dep()->obj());
-		} catch (...) {  }
+		if (Linker::verbose) {
+			root->deps().for_each([] (Linker::Dependency const &dep) {
+				if (dep.obj().already_present()) return;
+				Linker::dump_link_map(dep.obj());
+			});
+		}
 
 	} catch(Linker::Not_found &symbol) {
 		warning("LD: symbol not found: '", symbol, "'");
@@ -121,7 +121,7 @@ Genode::Shared_object::~Shared_object()
 	if (verbose_shared)
 		log("LD: close shared object");
 
-	Mutex::Guard guard(shared_object_lock());
+	Mutex::Guard guard(Linker::shared_object_mutex());
 	destroy(_md_alloc, &const_cast<Root_object &>(to_root(_handle)));
 }
 

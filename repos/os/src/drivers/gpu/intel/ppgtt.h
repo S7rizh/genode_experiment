@@ -27,7 +27,6 @@
 /* local includes */
 #include <utils.h>
 
-
 namespace Genode
 {
 	/**
@@ -36,7 +35,7 @@ namespace Genode
 	 * \param addr         original address
 	 * \param alignm_log2  log2 of the required alignment
 	 */
-	inline addr_t trunc(addr_t const addr, addr_t const alignm_log2) {
+	inline Gpu::addr_t trunc(Gpu::addr_t const addr, Gpu::addr_t const alignm_log2) {
 		return (addr >> alignm_log2) << alignm_log2; }
 
 	/**
@@ -150,8 +149,7 @@ namespace Genode
 	{
 		private:
 
-			Genode::Allocator_guard &_guard;
-			Utils::Backend_alloc    &_backend;
+			Utils::Backend_alloc &_backend;
 
 		public:
 
@@ -165,7 +163,7 @@ namespace Genode
 			struct Page
 			{
 				Genode::Ram_dataspace_capability ds { };
-				addr_t  addr = 0;
+				Gpu::addr_t  addr = 0;
 				Page   *next = nullptr;
 			};
 
@@ -174,32 +172,30 @@ namespace Genode
 			Page pd   { };
 			Page pdp  { };
 
-			Scratch(Genode::Allocator_guard &guard,
-			        Utils::Backend_alloc    &backend)
+			Scratch(Utils::Backend_alloc &backend)
 			:
-				_guard(guard), _backend(backend)
+				_backend(backend)
 			{
 				/* XXX addr PAT helper instead of hardcoding */
-				page.ds    = _backend.alloc(_guard, PAGE_SIZE);
+				page.ds    = _backend.alloc(PAGE_SIZE);
 				page.addr  = Genode::Dataspace_client(page.ds).phys_addr();
 				page.addr |= 1;
 				page.addr |= 1 << 1;
 				page.next  = nullptr;
 
-				pt.ds      = _backend.alloc(_guard, PAGE_SIZE);
+				pt.ds      = _backend.alloc(PAGE_SIZE);
 				pt.addr    = Genode::Dataspace_client(pt.ds).phys_addr();
 				pt.addr   |= 1;
 				pt.addr   |= 1 << 1;
-				pt.addr   |= 1 << 7;
 				pt.next    = &page;
 
-				pd.ds      = _backend.alloc(_guard, PAGE_SIZE);
+				pd.ds      = _backend.alloc(PAGE_SIZE);
 				pd.addr    = Genode::Dataspace_client(pd.ds).phys_addr();
 				pd.addr   |= 1;
 				pd.addr   |= 1 << 1;
 				pd.next    = &pt;
 
-				pdp.ds     = _backend.alloc(_guard, PAGE_SIZE);
+				pdp.ds     = _backend.alloc(PAGE_SIZE);
 				pdp.addr   = Genode::Dataspace_client(pdp.ds).phys_addr();
 				pdp.addr  |= 1;
 				pdp.addr  |= 1 << 1;
@@ -208,10 +204,10 @@ namespace Genode
 
 			virtual ~Scratch()
 			{
-				_backend.free(_guard, pdp.ds);
-				_backend.free(_guard, pd.ds);
-				_backend.free(_guard, pt.ds);
-				_backend.free(_guard, page.ds);
+				_backend.free(pdp.ds);
+				_backend.free(pd.ds);
+				_backend.free(pt.ds);
+				_backend.free(page.ds);
 			}
 	};
 }
@@ -228,6 +224,7 @@ class Genode::Level_4_translation_table
 		static constexpr size_t PAGE_MASK      = ~((1UL << PAGE_SIZE_LOG2) - 1);
 
 		class Misaligned {};
+		class Invalid_address {};
 		class Invalid_range {};
 		class Double_insertion {};
 
@@ -236,20 +233,18 @@ class Genode::Level_4_translation_table
 			using Common = Common_descriptor;
 
 			struct Pat : Bitfield<7, 1> { };          /* page attribute table */
-			struct G   : Bitfield<8, 1> { };          /* global               */
 			struct Pa  : Bitfield<12, 36> { };        /* physical address     */
-			struct Mt  : Bitset_3<Pwt, Pcd, Pat> { }; /* memory type          */
 
-			static access_t create(Page_flags const &flags, addr_t const pa)
+			static access_t create(Page_flags const &flags, Gpu::addr_t const pa)
 			{
 				/* XXX: Set memory type depending on active PAT */
 				return Common::create(flags) | Pat::bits(1) | Pa::masked(pa);
 			}
 
 			static bool scratch(typename Descriptor::access_t desc,
-			                    addr_t scratch_addr)
+			                    Gpu::addr_t const scratch_addr)
 			{
-				return desc == scratch_addr;
+				return Pa::masked(desc) == Pa::masked(scratch_addr);
 			}
 		};
 
@@ -266,7 +261,7 @@ class Genode::Level_4_translation_table
 			            Scratch::Page               *scratch)
 			: flags(flags), alloc(alloc), scratch(scratch) { }
 
-			void operator () (addr_t const vo, addr_t const pa,
+			void operator () (Gpu::addr_t const vo, Gpu::addr_t const pa,
 			                  size_t const size,
 			                  Descriptor::access_t &desc)
 			{
@@ -278,8 +273,9 @@ class Genode::Level_4_translation_table
 				Descriptor::access_t table_entry =
 					Descriptor::create(flags, pa);
 
-				if (    Descriptor::present(desc)
-				    && !Descriptor::scratch(desc, scratch->addr)) {
+				/* only complain if we overmap */
+				if (   !Descriptor::scratch(desc, scratch->addr)
+				    && !Descriptor::scratch(desc, pa)) {
 					throw Double_insertion();
 				}
 				desc = table_entry;
@@ -295,7 +291,7 @@ class Genode::Level_4_translation_table
 				            Scratch::Page               *scratch)
 				: alloc(alloc), scratch(scratch) { }
 
-				void operator () (addr_t /* vo */, addr_t /* pa */,
+				void operator () (Gpu::addr_t /* vo */, Gpu::addr_t /* pa */,
 				                  size_t /* size */,
 				                  Descriptor::access_t &desc)
 				{
@@ -304,12 +300,15 @@ class Genode::Level_4_translation_table
 		};
 
 		template <typename FUNC>
-		void _range_op(addr_t vo, addr_t pa, size_t size, FUNC &&func)
+		void _range_op(Gpu::addr_t vo, Gpu::addr_t pa, size_t size, FUNC &&func)
 		{
 			for (size_t i = vo >> PAGE_SIZE_LOG2; size > 0;
 			     i = vo >> PAGE_SIZE_LOG2) {
-				addr_t end = (vo + PAGE_SIZE) & PAGE_MASK;
+				Gpu::addr_t end = (vo + PAGE_SIZE) & PAGE_MASK;
 				size_t sz  = min(size, end-vo);
+
+				if (i >= MAX_ENTRIES)
+					throw Invalid_address();
 
 				func(vo, pa, sz, _entries[i]);
 
@@ -335,7 +334,7 @@ class Genode::Level_4_translation_table
 		 */
 		Level_4_translation_table(Scratch::Page *scratch)
 		{
-			if (!aligned((addr_t)this, ALIGNM_LOG2)) { throw Misaligned(); }
+			if (!aligned((Gpu::addr_t)this, ALIGNM_LOG2)) { throw Misaligned(); }
 
 			for (size_t i = 0; i < MAX_ENTRIES; i++) {
 				_entries[i] = scratch->addr;
@@ -345,7 +344,7 @@ class Genode::Level_4_translation_table
 		/**
 		 * Returns True if table does not contain any page mappings.
 		 */
-		bool empty(addr_t scratch_addr)
+		bool empty(Gpu::addr_t scratch_addr)
 		{
 			for (unsigned i = 0; i < MAX_ENTRIES; i++) {
 				if (!Descriptor::scratch(_entries[i], scratch_addr)) {
@@ -366,7 +365,7 @@ class Genode::Level_4_translation_table
 		 * \param flags  mapping flags
 		 * \param alloc  second level translation table allocator
 		 */
-		void insert_translation(addr_t vo, addr_t pa, size_t size,
+		void insert_translation(Gpu::addr_t vo, Gpu::addr_t pa, size_t size,
 		                        Page_flags const & flags,
 		                        Translation_table_allocator *alloc,
 		                        Scratch::Page               *scratch)
@@ -381,7 +380,7 @@ class Genode::Level_4_translation_table
 		 * \param size  region size
 		 * \param alloc second level translation table allocator
 		 */
-		void remove_translation(addr_t vo, size_t size,
+		void remove_translation(Gpu::addr_t vo, size_t size,
 		                        Translation_table_allocator *alloc,
 		                        Scratch::Page               *scratch)
 		{
@@ -400,16 +399,13 @@ class Genode::Page_directory
 		static constexpr size_t PAGE_MASK   = ~((1UL << PAGE_SIZE_LOG2) - 1);
 
 		class Misaligned {};
+		class Invalid_address {};
 		class Invalid_range {};
 		class Double_insertion {};
 
 		struct Base_descriptor : Common_descriptor
 		{
 			using Common = Common_descriptor;
-
-			struct Ps : Common::template Bitfield<7, 1> { };  /* page size */
-
-			static bool maps_page(access_t const v) { return Ps::get(v); }
 		};
 
 		struct Page_descriptor : Base_descriptor
@@ -417,38 +413,21 @@ class Genode::Page_directory
 			using Base = Base_descriptor;
 
 			/**
-			 * Global attribute
-			 */
-			struct G : Base::template Bitfield<8, 1> { };
-
-			/**
-			 * Page attribute table
-			 */
-			struct Pat : Base::template Bitfield<12, 1> { };
-
-			/**
 			 * Physical address
 			 */
-			struct Pa : Base::template Bitfield<PAGE_SIZE_LOG2,
-			                                     48 - PAGE_SIZE_LOG2> { };
-
-			/**
-			 * Memory type
-			 */
-			struct Mt : Base::template Bitset_3<Base::Pwt,
-			                                    Base::Pcd, Pat> { };
+			struct Pa : Base::template Bitfield<12, 36> { };
 
 			static typename Base::access_t create(Page_flags const &flags,
-			                                      addr_t const pa)
+			                                      Gpu::addr_t const pa)
 			{
 				/* XXX: Set memory type depending on active PAT */
 				return Base::create(flags) | Pa::masked(pa);
 			}
 
 			static bool scratch(typename Page_descriptor::access_t desc,
-			                    addr_t scratch_addr)
+			                    Gpu::addr_t const scratch_addr)
 			{
-				return desc == scratch_addr;
+				return Pa::masked(desc) == Pa::masked(scratch_addr);
 			}
 		};
 
@@ -461,14 +440,8 @@ class Genode::Page_directory
 			 */
 			struct Pa : Base::template Bitfield<12, 36> { };
 
-			/**
-			 * Memory types
-			 */
-			struct Mt : Base::template Bitset_2<Base::Pwt,
-			                                    Base::Pcd> { };
-
 			static typename Base::access_t create(Page_flags const &flags,
-			                                      addr_t const pa)
+			                                      Gpu::addr_t const pa)
 			{
 				/* XXX: Set memory type depending on active PAT */
 				return Base::create(flags) | Pa::masked(pa);
@@ -488,7 +461,7 @@ class Genode::Page_directory
 			            Scratch::Page               *scratch)
 			: flags(flags), alloc(alloc), scratch(scratch) { }
 
-			void operator () (addr_t const vo, addr_t const pa,
+			void operator () (Gpu::addr_t const vo, Gpu::addr_t const pa,
 			                  size_t const size,
 			                  typename Base_descriptor::access_t &desc)
 			{
@@ -498,15 +471,12 @@ class Genode::Page_directory
 					if (!alloc) { throw Allocator::Out_of_memory(); }
 
 					/* create and link next level table */
-					try { table = new (alloc) ENTRY(scratch->next); }
-					catch (...) { throw Allocator::Out_of_memory(); }
+					table = new (alloc) ENTRY(scratch->next);
 					ENTRY * phys_addr = (ENTRY*) alloc->phys_addr(table);
 
-					addr_t const pa = (addr_t)(phys_addr ? phys_addr : table);
+					Gpu::addr_t const pa = (Gpu::addr_t)(phys_addr ? phys_addr : table);
 					desc = (typename Base_descriptor::access_t) Table_descriptor::create(flags, pa);
 
-				} else if (Base_descriptor::maps_page(desc)) {
-					throw Double_insertion();
 				} else {
 					Base_descriptor::merge_access_rights(desc, flags);
 					ENTRY * phys_addr = (ENTRY*) Table_descriptor::Pa::masked(desc);
@@ -515,7 +485,7 @@ class Genode::Page_directory
 				}
 
 				/* insert translation */
-				addr_t const table_vo = vo - (vo & PAGE_MASK);
+				Gpu::addr_t const table_vo = vo - (vo & PAGE_MASK);
 				table->insert_translation(table_vo, pa, size, flags, alloc, scratch->next);
 			}
 		};
@@ -529,41 +499,38 @@ class Genode::Page_directory
 							Scratch::Page               *scratch)
 				: alloc(alloc), scratch(scratch) { }
 
-				void operator () (addr_t const vo, addr_t /* pa */,
+				void operator () (Gpu::addr_t const vo, Gpu::addr_t /* pa */,
 				                  size_t const size,
 				                  typename Base_descriptor::access_t &desc)
 				{
-					if (Base_descriptor::present(desc) &&
-					    !Page_descriptor::scratch(desc, scratch->addr)) {
+					if (!Page_descriptor::scratch(desc, scratch->addr)) {
+						/* use allocator to retrieve virt address of table */
+						ENTRY *phys_addr = (ENTRY*)
+							Table_descriptor::Pa::masked(desc);
+						ENTRY *table = (ENTRY*) alloc->virt_addr(phys_addr);
+						if (!table) { table = (ENTRY*) phys_addr; }
 
-						if (Base_descriptor::maps_page(desc)) {
+						Gpu::addr_t const table_vo = vo - (vo & PAGE_MASK);
+						table->remove_translation(table_vo, size, alloc, scratch->next);
+						if (table->empty(scratch->next->addr)) {
+							destroy(alloc, table);
 							desc = scratch->addr;
-						} else {
-							/* use allocator to retrieve virt address of table */
-							ENTRY *phys_addr = (ENTRY*)
-								Table_descriptor::Pa::masked(desc);
-							ENTRY *table = (ENTRY*) alloc->virt_addr(phys_addr);
-							if (!table) { table = (ENTRY*) phys_addr; }
-
-							addr_t const table_vo = vo - (vo & PAGE_MASK);
-							table->remove_translation(table_vo, size, alloc, scratch->next);
-							if (table->empty(scratch->next->addr)) {
-								destroy(alloc, table);
-								desc = scratch->addr;
-							}
 						}
 					}
 				}
 		};
 
 		template <typename FUNC>
-		void _range_op(addr_t vo, addr_t pa, size_t size, FUNC &&func)
+		void _range_op(Gpu::addr_t vo, Gpu::addr_t pa, size_t size, FUNC &&func)
 		{
 			for (size_t i = vo >> PAGE_SIZE_LOG2; size > 0;
 			     i = vo >> PAGE_SIZE_LOG2)
 			{
-				addr_t end = (vo + PAGE_SIZE) & PAGE_MASK;
+				Gpu::addr_t end = (vo + PAGE_SIZE) & PAGE_MASK;
 				size_t sz  = min(size, end-vo);
+
+				if (i >= MAX_ENTRIES)
+					throw Invalid_address();
 
 				func(vo, pa, sz, _entries[i]);
 
@@ -583,7 +550,7 @@ class Genode::Page_directory
 
 		Page_directory(Scratch::Page *scratch)
 		{
-			if (!aligned((addr_t)this, ALIGNM_LOG2)) { throw Misaligned(); }
+			if (!aligned((Gpu::addr_t)this, ALIGNM_LOG2)) { throw Misaligned(); }
 
 			for (size_t i = 0; i < MAX_ENTRIES; i++) {
 				_entries[i] = scratch->addr;
@@ -595,7 +562,7 @@ class Genode::Page_directory
 		 *
 		 * \return   false if an entry is present, True otherwise
 		 */
-		bool empty(addr_t scratch_addr)
+		bool empty(Gpu::addr_t scratch_addr)
 		{
 			for (unsigned i = 0; i < MAX_ENTRIES; i++) {
 				if (!Page_descriptor::scratch(_entries[i], scratch_addr)) {
@@ -616,7 +583,7 @@ class Genode::Page_directory
 		 * \param flags  mapping flags
 		 * \param alloc  second level translation table allocator
 		 */
-		void insert_translation(addr_t vo, addr_t pa, size_t size,
+		void insert_translation(Gpu::addr_t vo, Gpu::addr_t pa, size_t size,
 		                        Page_flags const & flags,
 		                        Translation_table_allocator *alloc,
 		                        Scratch::Page               *scratch)
@@ -631,7 +598,7 @@ class Genode::Page_directory
 		 * \param size  region size
 		 * \param alloc second level translation table allocator
 		 */
-		void remove_translation(addr_t vo, size_t size,
+		void remove_translation(Gpu::addr_t vo, size_t size,
 		                        Translation_table_allocator *alloc,
 		                        Scratch::Page               *scratch)
 		{
@@ -651,22 +618,22 @@ class Genode::Pml4_table
 		static constexpr uint64_t PAGE_MASK    = ~((1ULL << PAGE_SIZE_LOG2) - 1);
 
 		class Misaligned {};
+		class Invalid_address {};
 		class Invalid_range {};
 
 		struct Descriptor : Common_descriptor
 		{
 			struct Pa : Bitfield<12, 36> { };    /* physical address */
-			struct Mt : Bitset_2<Pwt, Pcd> { };  /* memory type      */
 
-			static access_t create(Page_flags const &flags, addr_t const pa)
+			static access_t create(Page_flags const &flags, Gpu::addr_t const pa)
 			{
 				/* XXX: Set memory type depending on active PAT */
 				return Common_descriptor::create(flags) | Pa::masked(pa);
 			}
 
-			static bool scratch(Descriptor::access_t desc, addr_t const pa)
+			static bool scratch(Descriptor::access_t desc, Gpu::addr_t const pa)
 			{
-				return desc == pa;
+				return Pa::masked(desc) == Pa::masked(pa);
 			}
 		};
 
@@ -685,7 +652,7 @@ class Genode::Pml4_table
 				            Scratch::Page               *scratch)
 				: flags(flags), alloc(alloc), scratch(scratch) { }
 
-				void operator () (addr_t const vo, addr_t const pa,
+				void operator () (Gpu::addr_t const vo, Gpu::addr_t const pa,
 				                  size_t const size,
 				                  Descriptor::access_t &desc)
 				{
@@ -695,11 +662,10 @@ class Genode::Pml4_table
 						if (!alloc) { throw Allocator::Out_of_memory(); }
 
 						/* create and link next level table */
-						try { table = new (alloc) ENTRY(scratch->next); }
-						catch (...) { throw Allocator::Out_of_memory(); }
+						table = new (alloc) ENTRY(scratch->next);
 
 						ENTRY * phys_addr = (ENTRY*) alloc->phys_addr(table);
-						addr_t const pa = (addr_t)(phys_addr ? phys_addr : table);
+						Gpu::addr_t const pa = (Gpu::addr_t)(phys_addr ? phys_addr : table);
 						desc = Descriptor::create(flags, pa);
 					} else {
 						Descriptor::merge_access_rights(desc, flags);
@@ -709,7 +675,7 @@ class Genode::Pml4_table
 					}
 
 					/* insert translation */
-					addr_t const table_vo = vo - (vo & PAGE_MASK);
+					Gpu::addr_t const table_vo = vo - (vo & PAGE_MASK);
 					table->insert_translation(table_vo, pa, size, flags, alloc, scratch->next);
 				}
 		};
@@ -723,7 +689,7 @@ class Genode::Pml4_table
 				            Scratch::Page               *scratch)
 				: alloc(alloc), scratch(scratch) { }
 
-				void operator () (addr_t const vo, addr_t /* pa */,
+				void operator () (Gpu::addr_t const vo, Gpu::addr_t /* pa */,
 				                  size_t const size,
 				                  Descriptor::access_t &desc)
 				{
@@ -733,7 +699,7 @@ class Genode::Pml4_table
 						ENTRY *table = (ENTRY*) alloc->virt_addr(phys_addr);
 						if (!table) { table = (ENTRY*) phys_addr; }
 
-						addr_t const table_vo = vo - (vo & PAGE_MASK);
+						Gpu::addr_t const table_vo = vo - (vo & PAGE_MASK);
 						table->remove_translation(table_vo, size, alloc, scratch->next);
 						if (table->empty(scratch->next->addr)) {
 							destroy(alloc, table);
@@ -744,12 +710,16 @@ class Genode::Pml4_table
 		};
 
 		template <typename FUNC>
-		void _range_op(addr_t vo, addr_t pa, size_t size, FUNC &&func)
+		void _range_op(Gpu::addr_t vo, Gpu::addr_t pa, size_t size, FUNC &&func)
 		{
 			for (size_t i = vo >> PAGE_SIZE_LOG2; size > 0;
 			     i = vo >> PAGE_SIZE_LOG2) {
-				addr_t const end = (vo + PAGE_SIZE) & PAGE_MASK;
+
+				Gpu::addr_t const end = (vo + PAGE_SIZE) & PAGE_MASK;
 				size_t const sz  = min(size, end-vo);
+
+				if (i >= MAX_ENTRIES)
+					throw Invalid_address();
 
 				func(vo, pa, sz, _entries[i]);
 
@@ -769,7 +739,7 @@ class Genode::Pml4_table
 
 		Pml4_table(Scratch::Page *scratch)
 		{
-			if (!aligned((addr_t)this, ALIGNM_LOG2)) { throw Misaligned(); }
+			if (!aligned((Gpu::addr_t)this, ALIGNM_LOG2)) { throw Misaligned(); }
 
 			for (size_t i = 0; i < MAX_ENTRIES; i++) {
 				_entries[i] = scratch->addr;
@@ -787,7 +757,7 @@ class Genode::Pml4_table
 		 * \param flags  mapping flags
 		 * \param alloc  second level translation table allocator
 		 */
-		void insert_translation(addr_t vo, addr_t pa, size_t size,
+		void insert_translation(Gpu::addr_t vo, Gpu::addr_t pa, size_t size,
 		                        Page_flags const & flags,
 		                        Translation_table_allocator *alloc,
 		                        Scratch::Page *scratch)
@@ -802,7 +772,7 @@ class Genode::Pml4_table
 		 * \param size  region size
 		 * \param alloc second level translation table allocator
 		 */
-		void remove_translation(addr_t vo, size_t size,
+		void remove_translation(Gpu::addr_t vo, size_t size,
 		                        Translation_table_allocator *alloc,
 		                        Scratch::Page *scratch)
 		{
@@ -832,9 +802,8 @@ struct Igd::Ppgtt : public Genode::Pml4_table
  */
 struct Igd::Ppgtt_scratch : public Genode::Scratch
 {
-		Ppgtt_scratch(Genode::Allocator_guard &guard,
-		              Utils::Backend_alloc    &backend)
-		: Scratch(guard, backend) { }
+		Ppgtt_scratch(Utils::Backend_alloc &backend)
+		: Scratch(backend) { }
 };
 
 #endif /* _PPGTT_H_ */

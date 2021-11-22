@@ -24,6 +24,10 @@ proc depot_spec { } {
 	if {[have_spec arm_v6]}  { return "arm_v6" }
 	if {[have_spec arm_v7a]} { return "arm_v7a" }
 	if {[have_spec arm_v8a]} { return "arm_v8a" }
+	if {[have_spec riscv]}   { return "riscv" }
+
+	puts stderr "Error: unsupported architecture"
+	exit 1
 }
 
 
@@ -104,7 +108,7 @@ proc _copy_directory_content_to_run_dir { dir } {
 		exit 1
 	}
 
-	foreach file [glob -directory $dir *] { file copy -force $file [run_dir]/genode/ }
+	foreach file [glob -nocomplain -directory $dir *] { copy_file $file [run_dir]/genode/ }
 }
 
 
@@ -209,6 +213,9 @@ proc _depot_auto_update { archives } {
 	append cmd "CROSS_DEV_PREFIX=[cross_dev_prefix] "
 	append cmd "DEPOT_DIR=[depot_dir] "
 	append cmd "UPDATE_VERSIONS=1 FORCE=1 REBUILD= "
+
+	if {[get_cmd_switch --ccache]} {
+		append cmd "CCACHE=1 " }
 
 	set make_j_arg ""
 	regexp {.*(-j\d*)} [get_cmd_arg_first --make ""] dummy make_j_arg
@@ -459,36 +466,10 @@ proc check_for_missing_depot_archives { } {
 
 proc drivers_interactive_pkg { } {
 
-	if {[have_spec muen]}      { return drivers_interactive-muen }
-	if {[have_spec linux]}     { return drivers_interactive-linux }
-	if {[have_spec x86]}       { return drivers_interactive-pc }
-	if {[have_spec pbxa9]}     { return drivers_interactive-pbxa9 }
-	if {[have_spec imx53_qsb]} { return drivers_interactive-imx53_qsb }
-	if {[have_spec rpi]}       { return drivers_interactive-rpi }
-	if {[have_spec imx8q_evk]} { return drivers_interactive-imx8q_evk }
-	if {[have_spec panda]}     { return drivers_interactive-panda }
-	if {[have_spec arndale]}   { return drivers_interactive-arndale }
+	if {[have_board imx53_qsb_tz]} { return drivers_interactive-imx53_qsb }
 
-	puts stderr "drivers_interactive package undefined for this build configuration"
-	exit 1
+	return "drivers_interactive-[board]"
 }
 
 
-proc drivers_nic_pkg { } {
-
-	if {[have_spec x86] && ![have_spec muen] &&
-	    ![have_spec linux]}          { return drivers_nic-pc              }
-	if {[have_spec muen]}            { return drivers_nic-muen            }
-	if {[have_spec linux]}           { return drivers_nic-linux           }
-	if {[have_spec pbxa9]}           { return drivers_nic-pbxa9           }
-	if {[have_spec rpi]}             { return drivers_nic-rpi             }
-	if {[have_spec zynq_qemu]}       { return drivers_nic-zynq            }
-	if {[have_spec imx53_qsb]}       { return drivers_nic-imx53_qsb       }
-	if {[have_spec imx6q_sabrelite]} { return drivers_nic-imx6q_sabrelite }
-	if {[have_spec imx7d_sabre]}     { return drivers_nic-imx7d_sabre     }
-	if {[have_spec imx8q_evk]}       { return drivers_nic-imx8q_evk       }
-	if {[have_spec virt_qemu]}       { return drivers_nic-virt_qemu       }
-
-	puts stderr "drivers_nic package undefined for this build configuration"
-	exit 1
-}
+proc drivers_nic_pkg { } { return "drivers_nic-[board]" }

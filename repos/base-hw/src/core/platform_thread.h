@@ -38,12 +38,13 @@ namespace Genode {
 	class Rm_client;
 	class Platform_thread;
 	class Platform_pd;
+}
 
-	/**
-	 * Userland interface for the management of kernel thread-objects
-	 */
-	class Platform_thread : Noncopyable
-	{
+
+class Genode::Platform_thread : Noncopyable
+{
+	private:
+
 		/*
 		 * Noncopyable
 		 */
@@ -88,141 +89,142 @@ namespace Genode {
 
 		unsigned _scale_priority(unsigned virt_prio)
 		{
-			return Cpu_session::scale_priority(Kernel::Cpu_priority::MAX,
+			return Cpu_session::scale_priority(Kernel::Cpu_priority::max(),
 			                                   virt_prio);
 		}
 
-		public:
+		Platform_pd &_kernel_main_get_core_platform_pd();
 
-			/**
-			 * Constructor for core threads
-			 *
-			 * \param label       debugging label
-			 * \param utcb        virtual address of UTCB within core
-			 */
-			Platform_thread(Label const &label, Native_utcb &utcb);
+	public:
 
-			/**
-			 * Constructor for threads outside of core
-			 *
-			 * \param quota      CPU quota that shall be granted to the thread
-			 * \param label      debugging label
-			 * \param virt_prio  unscaled processor-scheduling priority
-			 * \param utcb       core local pointer to userland stack
-			 */
-			Platform_thread(size_t const quota, Label const &label,
-			                unsigned const virt_prio, Affinity::Location,
-			                addr_t const utcb);
+		/**
+		 * Constructor for core threads
+		 *
+		 * \param label       debugging label
+		 * \param utcb        virtual address of UTCB within core
+		 */
+		Platform_thread(Label const &label, Native_utcb &utcb);
 
-			/**
-			 * Destructor
-			 */
-			~Platform_thread();
+		/**
+		 * Constructor for threads outside of core
+		 *
+		 * \param quota      CPU quota that shall be granted to the thread
+		 * \param label      debugging label
+		 * \param virt_prio  unscaled processor-scheduling priority
+		 * \param utcb       core local pointer to userland stack
+		 */
+		Platform_thread(size_t const quota, Label const &label,
+		                unsigned const virt_prio, Affinity::Location,
+		                addr_t const utcb);
 
-			/**
-			 * Return information about current fault
-			 */
-			Kernel::Thread_fault fault_info() { return _kobj->fault(); }
+		/**
+		 * Destructor
+		 */
+		~Platform_thread();
 
-			/**
-			 * Join a protection domain
-			 *
-			 * \param pd             platform pd object pointer
-			 * \param main_thread    wether thread is the first in protection domain
-			 * \param address_space  corresponding Genode address space
-			 *
-			 * This function has no effect when called more twice for a
-			 * given thread.
-			 */
-			void join_pd(Platform_pd *const pd, bool const main_thread,
-			             Weak_ptr<Address_space> address_space);
+		/**
+		 * Return information about current fault
+		 */
+		Kernel::Thread_fault fault_info() { return _kobj->fault(); }
 
-			/**
-			 * Run this thread
-			 *
-			 * \param ip  initial instruction pointer
-			 * \param sp  initial stack pointer
-			 */
-			int start(void * const ip, void * const sp);
+		/**
+		 * Join a protection domain
+		 *
+		 * \param pd             platform pd object pointer
+		 * \param main_thread    wether thread is the first in protection domain
+		 * \param address_space  corresponding Genode address space
+		 *
+		 * This function has no effect when called more twice for a
+		 * given thread.
+		 */
+		void join_pd(Platform_pd *const pd, bool const main_thread,
+		             Weak_ptr<Address_space> address_space);
 
-			void restart();
+		/**
+		 * Run this thread
+		 *
+		 * \param ip  initial instruction pointer
+		 * \param sp  initial stack pointer
+		 */
+		int start(void * const ip, void * const sp);
 
-			/**
-			 * Pause this thread
-			 */
-			void pause() { Kernel::pause_thread(*_kobj); }
+		void restart();
 
-			/**
-			 * Enable/disable single stepping
-			 */
-			void single_step(bool) { }
+		/**
+		 * Pause this thread
+		 */
+		void pause() { Kernel::pause_thread(*_kobj); }
 
-			/**
-			 * Resume this thread
-			 */
-			void resume() { Kernel::resume_thread(*_kobj); }
+		/**
+		 * Enable/disable single stepping
+		 */
+		void single_step(bool) { }
 
-			/**
-			 * Set CPU quota of the thread to 'quota'
-			 */
-			void quota(size_t const quota);
+		/**
+		 * Resume this thread
+		 */
+		void resume() { Kernel::resume_thread(*_kobj); }
 
-			/**
-			 * Get raw thread state
-			 */
-			Thread_state state();
+		/**
+		 * Set CPU quota of the thread to 'quota'
+		 */
+		void quota(size_t const quota);
 
-			/**
-			 * Override raw thread state
-			 */
-			void state(Thread_state s);
+		/**
+		 * Get raw thread state
+		 */
+		Thread_state state();
 
-			/**
-			 * Return unique identification of this thread as faulter
-			 */
-			unsigned long pager_object_badge() { return (unsigned long)this; }
+		/**
+		 * Override raw thread state
+		 */
+		void state(Thread_state s);
 
-			/**
-			 * Set the executing CPU for this thread
-			 *
-			 * \param location  targeted location in affinity space
-			 */
-			void affinity(Affinity::Location const & location);
+		/**
+		 * Return unique identification of this thread as faulter
+		 */
+		unsigned long pager_object_badge() { return (unsigned long)this; }
 
-			/**
-			 * Get the executing CPU for this thread
-			 */
-			Affinity::Location affinity() const;
+		/**
+		 * Set the executing CPU for this thread
+		 *
+		 * \param location  targeted location in affinity space
+		 */
+		void affinity(Affinity::Location const & location);
 
-			/**
-			 * Return the address space to which the thread is bound
-			 */
-			Weak_ptr<Address_space>& address_space();
+		/**
+		 * Get the executing CPU for this thread
+		 */
+		Affinity::Location affinity() const;
 
-			/**
-			 * Return execution time consumed by the thread
-			 */
-			Trace::Execution_time execution_time() const
-			{
-				Genode::uint64_t execution_time =
-					const_cast<Platform_thread *>(this)->_kobj->execution_time();
-				return { execution_time, 0, _quota, _priority }; }
+		/**
+		 * Return the address space to which the thread is bound
+		 */
+		Weak_ptr<Address_space>& address_space();
+
+		/**
+		 * Return execution time consumed by the thread
+		 */
+		Trace::Execution_time execution_time() const
+		{
+			Genode::uint64_t execution_time =
+				const_cast<Platform_thread *>(this)->_kobj->execution_time();
+			return { execution_time, 0, _quota, _priority }; }
 
 
-			/***************
-			 ** Accessors **
-			 ***************/
+		/***************
+		 ** Accessors **
+		 ***************/
 
-			Label label() const { return _label; };
+		Label label() const { return _label; };
 
-			void pager(Pager_object &pager);
+		void pager(Pager_object &pager);
 
-			Pager_object &pager();
+		Pager_object &pager();
 
-			Platform_pd * pd() const { return _pd; }
+		Platform_pd * pd() const { return _pd; }
 
-			Ram_dataspace_capability utcb() const { return _utcb; }
-	};
-}
+		Ram_dataspace_capability utcb() const { return _utcb; }
+};
 
 #endif /* _CORE__PLATFORM_THREAD_H_ */

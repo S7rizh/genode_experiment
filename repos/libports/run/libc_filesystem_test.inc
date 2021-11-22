@@ -4,19 +4,24 @@
 # \date   2011-05-27
 #
 
-if {[have_spec odroid_xu] || [have_spec zynq]} {
+if {[have_board zynq_qemu]} {
 	puts "Run script does not support this platform."
 	exit 0
 }
 
+if {[get_cmd_switch --autopilot] && [have_board riscv_qemu]} {
+	puts "Autopilot mode is not supported on this platform."
+	exit 0
+}
+
 # use SD on Qemu/pbxa9
-set use_sd_card_drv [expr [have_include "power_on/qemu"] && [have_spec pbxa9]]
+set use_sd_card_drv [expr [have_include "power_on/qemu"] && [have_board pbxa9]]
 
 # use AHCI on x86
 set use_ahci        [expr [have_spec x86] && ![have_spec linux]]
 
 # use vfs_block on Linux and Qemu/rpi3
-set use_vfs_block   [expr [have_spec linux] || [expr [have_include "power_on/qemu"] && [have_spec rpi3]]]
+set use_vfs_block   [expr [have_spec linux] || [expr [have_include "power_on/qemu"] && [have_board rpi3]]]
 
 if {[catch { exec which $mkfs_cmd } ]} {
 	puts stderr "Error: $mkfs_cmd not installed, aborting test"; exit }
@@ -116,12 +121,11 @@ append_if $use_sd_card_drv config {
 		<resource name="RAM" quantum="1M"/>
 		<provides><service name="Platform"/></provides>
 		<config>
-			<device name="">
+			<device name="pl180" type="arm,pl18x">
 				<io_mem   address="0x10005000" size="0x1000"/>
-				<property name="compatible" value="arm,pl18x"/>
 			</device>
 			<policy label="pl180_sd_card_drv -> ">
-				<device name=""/>
+				<device name="pl180"/>
 			</policy>
 		</config>
 		<route>

@@ -1,6 +1,11 @@
-if {[have_spec foc] || [have_spec linux] || [have_spec rpi3] ||
-    [expr [have_spec imx53] && [have_spec trustzone]]} {
+if {[have_spec foc] || [have_spec linux] || [have_board rpi3] ||
+    [have_board imx53_qsb_tz]} {
 	puts "Run script is not supported on this platform."
+	exit 0
+}
+
+if {[get_cmd_switch --autopilot] && [have_board riscv_qemu]} {
+	puts "Autopilot mode is not supported on this platform."
 	exit 0
 }
 
@@ -54,22 +59,25 @@ append config {
 		<route>
 			<service name="ROM" label="config"> <parent label="drivers.config"/> </service>
 			<service name="Timer"> <child name="timer"/> </service>
+			<service name="Uplink"> <child name="nic_router"/> </service>
 			<any-service> <parent/> </any-service>
 		</route>
-		<provides> <service name="Nic"/> </provides>
 	</start>
 
 	<start name="nic_router" caps="200">
 		<resource name="RAM" quantum="10M"/>
-		<provides><service name="Nic"/></provides>
+		<provides>
+			<service name="Nic"/>
+			<service name="Uplink"/>
+		</provides>
 		<config verbose="no"
 		        verbose_packets="no"
 		        dhcp_discover_timeout_sec="1"
 		        icmp_idle_timeout_sec="6">
 
-			<policy label_prefix="ping_1" domain="ping_1"/>
-			<policy label_prefix="ping_2" domain="ping_2"/>
-			<uplink                       domain="uplink"/>
+			<policy label_prefix="ping_1"  domain="ping_1"/>
+			<policy label_prefix="ping_2"  domain="ping_2"/>
+			<policy label_prefix="drivers" domain="uplink"/>
 
 			<domain name="uplink">
 				<nat domain="ping_1" icmp-ids="100"/>
@@ -91,22 +99,21 @@ append config {
 			</domain>
 
 		</config>
-		<route>
-			<service name="Nic"> <child name="drivers"/> </service>
-			<any-service> <parent/> <any-child/> </any-service>
-		</route>
 	</start>
 
 	<start name="ping_2_nic_router" caps="200">
 		<binary name="nic_router"/>
 		<resource name="RAM" quantum="10M"/>
-		<provides><service name="Nic"/></provides>
+		<provides>
+			<service name="Nic"/>
+			<service name="Uplink"/>
+		</provides>
 		<config verbose="no"
 		        verbose_packets="no"
 		        icmp_idle_timeout_sec="10">
 
 			<policy label_prefix="ping_2" domain="ping_2"/>
-			<uplink                       domain="uplink"/>
+			<nic-client                   domain="uplink"/>
 
 			<domain name="uplink">
 				<nat domain="ping_2" icmp-ids="100" udp-ports="100"/>

@@ -30,6 +30,7 @@ class Genode::Path_base
 	public:
 
 		class Path_too_long { };
+		class Path_invalid  { };
 
 	protected:
 
@@ -196,6 +197,9 @@ class Genode::Path_base
 
 		void import(char const *path, char const *pwd = 0)
 		{
+			if (!path)
+				throw Path_invalid();
+
 			/*
 			 * Validate 'pwd' argument, if not supplied, enforce invariant
 			 * that 'pwd' is an absolute path.
@@ -326,7 +330,7 @@ class Genode::Path_base
 			return strcmp(_path, other._path) != 0;
 		}
 
-		char const *last_element()
+		char const *last_element() const
 		{
 			return last_element(_path)+1;
 		}

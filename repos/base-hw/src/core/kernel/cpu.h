@@ -24,8 +24,8 @@
 #include <kernel/inter_processor_work.h>
 #include <kernel/thread.h>
 
-namespace Kernel
-{
+namespace Kernel {
+
 	/**
 	 * Class for kernel data that is needed to manage a specific CPU
 	 */
@@ -35,11 +35,6 @@ namespace Kernel
 	 * Provides a CPU object for every available CPU
 	 */
 	class Cpu_pool;
-
-	/**
-	 * Return singleton of CPU pool
-	 */
-	Cpu_pool &cpu_pool();
 }
 
 
@@ -107,12 +102,16 @@ class Kernel::Cpu : public Genode::Cpu, private Irq::Pool, private Timeout
 			/**
 			 * Construct idle context for CPU 'cpu'
 			 */
-			Idle_thread(Cpu &cpu);
+			Idle_thread(Board::Address_space_id_allocator &addr_space_id_alloc,
+			            Irq::Pool                         &user_irq_pool,
+			            Cpu_pool                          &cpu_pool,
+			            Cpu                               &cpu,
+			            Pd                                &core_pd);
 		};
 
 
 		unsigned const _id;
-		Board::Pic     _pic {};
+		Board::Pic     _pic;
 		Timer          _timer;
 		Cpu_scheduler  _scheduler;
 		Idle_thread    _idle;
@@ -132,8 +131,12 @@ class Kernel::Cpu : public Genode::Cpu, private Irq::Pool, private Timeout
 		/**
 		 * Construct object for CPU 'id'
 		 */
-		Cpu(unsigned const id,
-		    Inter_processor_work_list & global_work_list);
+		Cpu(unsigned                     const  id,
+		    Board::Address_space_id_allocator  &addr_space_id_alloc,
+		    Irq::Pool                          &user_irq_pool,
+		    Cpu_pool                           &cpu_pool,
+		    Pd                                 &core_pd,
+		    Board::Global_interrupt_controller &global_irq_ctrl);
 
 		static inline unsigned primary_id() { return 0; }
 
@@ -148,7 +151,7 @@ class Kernel::Cpu : public Genode::Cpu, private Irq::Pool, private Timeout
 		 * \param irq_id  id of the interrupt that occured
 		 * \returns true if the interrupt belongs to this CPU, otherwise false
 		 */
-		bool interrupt(unsigned const irq_id);
+		bool handle_if_cpu_local_interrupt(unsigned const irq_id);
 
 		/**
 		 * Schedule 'job' at this CPU
@@ -197,15 +200,18 @@ class Kernel::Cpu_pool
 	private:
 
 		Inter_processor_work_list  _global_work_list {};
-		unsigned                   _count;
-		unsigned                   _initialized { _count };
+		unsigned                   _nr_of_cpus;
 		Genode::Constructible<Cpu> _cpus[NR_OF_CPUS];
 
 	public:
 
-		Cpu_pool();
+		Cpu_pool(unsigned nr_of_cpus);
 
-		bool initialize();
+		void
+		initialize_executing_cpu(Board::Address_space_id_allocator  &addr_space_id_alloc,
+		                         Irq::Pool                          &user_irq_pool,
+		                         Pd                                 &core_pd,
+		                         Board::Global_interrupt_controller &global_irq_ctrl);
 
 		/**
 		 * Return object of CPU 'id'
@@ -225,11 +231,13 @@ class Kernel::Cpu_pool
 		template <typename FUNC>
 		void for_each_cpu(FUNC const &func)
 		{
-			for (unsigned i = 0; i < _count; i++) func(cpu(i));
+			for (unsigned i = 0; i < _nr_of_cpus; i++) func(cpu(i));
 		}
 
 		Inter_processor_work_list & work_list() {
 			return _global_work_list; }
+
+		unsigned nr_of_cpus() { return _nr_of_cpus; }
 };
 
 #endif /* _CORE__KERNEL__CPU_H_ */

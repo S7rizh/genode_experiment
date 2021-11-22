@@ -4,7 +4,7 @@ if {[get_cmd_switch --autopilot] && [have_include "power_on/qemu"]} {
 }
 
 if {[have_spec pistachio] || [have_spec sel4] ||
-    [expr [have_spec foc] && [have_spec imx7d_sabre]] } {
+    [expr [have_spec foc] && [have_board imx7d_sabre]] } {
 	puts "Platform is unsupported."
 	exit 0
 }
@@ -86,6 +86,7 @@ build $build_components
 # write default .bash_profile file
 set bash_profile_fd [open bin/bash_profile w]
 puts $bash_profile_fd {
+ln -s a /home/b ; rm /home/b    # regression test for issue #4219
 echo 'creating build directory...'
 mkdir -p "/home/build"
 cp -r /genode/depot /home/build
@@ -244,14 +245,14 @@ install_config {
 # Boot modules
 #
 
-append  boot_modules { bash_profile genode.tar gmp.lib.so mpfr.lib.so mpc.lib.so }
+append  boot_modules { bash_profile genode.tar }
 lappend boot_modules "$binutils.tar" "$gcc.tar"
 lappend boot_modules libc.lib.so vfs.lib.so vfs_pipe.lib.so vfs
 
 build_boot_image $boot_modules
 
 
-append qemu_args " -nographic -m 768 "
+append qemu_args " -nographic -m 800 "
 
 # wait until Noux started
 run_genode_until {.*\[init -> vfs\] creating build directory\.\.\..*\n} $boot_timeout

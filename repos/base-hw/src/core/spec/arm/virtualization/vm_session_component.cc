@@ -14,6 +14,9 @@
 /* Genode includes */
 #include <util/construct_at.h>
 
+/* base internal includes */
+#include <base/internal/unmanaged_singleton.h>
+
 /* core includes */
 #include <kernel/core_interface.h>
 #include <vm_session_component.h>
@@ -22,6 +25,7 @@
 #include <core_env.h>
 
 using namespace Genode;
+
 
 static Core_mem_allocator & cma() {
 	return static_cast<Core_mem_allocator&>(platform().core_mem_alloc()); }
@@ -104,16 +108,17 @@ Vm_session_component::Vm_session_component(Rpc_entrypoint &ds_ep,
                                            Region_map &region_map,
                                            unsigned,
                                            Trace::Source_registry &)
-: Ram_quota_guard(resources.ram_quota),
-  Cap_quota_guard(resources.cap_quota),
-  _ep(ds_ep),
-  _constrained_md_ram_alloc(ram_alloc, _ram_quota_guard(), _cap_quota_guard()),
-  _sliced_heap(_constrained_md_ram_alloc, region_map),
-  _region_map(region_map),
-  _table(*construct_at<Board::Vm_page_table>(_alloc_table())),
-  _table_array(*(new (cma()) Board::Vm_page_table_array([] (void * virt) {
-                             return (addr_t)cma().phys_addr(virt);}))),
-  _id({(unsigned)alloc().alloc(), cma().phys_addr(&_table)})
+:
+	Ram_quota_guard(resources.ram_quota),
+	Cap_quota_guard(resources.cap_quota),
+	_ep(ds_ep),
+	_constrained_md_ram_alloc(ram_alloc, _ram_quota_guard(), _cap_quota_guard()),
+	_sliced_heap(_constrained_md_ram_alloc, region_map),
+	_region_map(region_map),
+	_table(*construct_at<Board::Vm_page_table>(_alloc_table())),
+	_table_array(*(new (cma()) Board::Vm_page_table_array([] (void * virt) {
+	                           return (addr_t)cma().phys_addr(virt);}))),
+	_id({(unsigned)alloc().alloc(), cma().phys_addr(&_table)})
 {
 	/* configure managed VM area */
 	_map.add_range(0, 0UL - 0x1000);
@@ -135,7 +140,10 @@ Vm_session_component::~Vm_session_component()
 
 	/* free region in allocator */
 	for (unsigned i = 0; i < _vcpu_id_alloc; i++) {
-		Vcpu & vcpu = _vcpus[i];
+		if (!_vcpus[i].constructed())
+			continue;
+
+		Vcpu & vcpu = *_vcpus[i];
 		if (vcpu.ds_cap.valid()) {
 			_region_map.detach(vcpu.ds_addr);
 			_constrained_md_ram_alloc.free(vcpu.ds_cap);

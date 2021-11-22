@@ -18,14 +18,18 @@
 
 namespace Hw { template <typename> struct Boot_info; }
 
+
 template <typename PLAT_INFO>
 struct Hw::Boot_info
 {
-	using Mapping_pool = Array<Mapping, 32>;
+	using Mapping_pool = Genode::Array<Mapping, 32>;
+	using Kernel_irqs  = Genode::Array<unsigned, NR_OF_CPUS + 1>;
 
 	addr_t        const table;
 	addr_t        const table_allocator;
+	addr_t              core_main_thread_utcb { 0 };
 	Mapping_pool  const elf_mappings;
+	Kernel_irqs         kernel_irqs { };
 	Mapping       const boot_modules;
 	Mmio_space    const mmio_space;
 	Memory_region_array ram_regions { };
@@ -39,9 +43,11 @@ struct Hw::Boot_info
 	          Mmio_space   const mmio_space,
 	          unsigned     const cpus,
 	          PLAT_INFO    const &plat_info)
-	: table(table), table_allocator(table_alloc),
-	  elf_mappings(elf_mappings), boot_modules(boot_modules),
-	  mmio_space(mmio_space), cpus(cpus), plat_info(plat_info) {}
+	:
+		table(table), table_allocator(table_alloc),
+		elf_mappings(elf_mappings), boot_modules(boot_modules),
+		mmio_space(mmio_space), cpus(cpus), plat_info(plat_info)
+	{ }
 };
 
 #endif /* _SRC__LIB__HW__BOOT_INFO_H_ */

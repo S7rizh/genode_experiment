@@ -62,14 +62,13 @@ if {[have_include "power_on/qemu"]} {
 	exit 0
 }
 
-# Tested for nova and muen.
-if {(![have_spec nova] && ![have_spec muen])} {
+# Tested for nova
+if {![have_spec nova]} {
 	puts "Platform is unsupported."
 	exit 0
 }
 
 set virtualbox_binary "virtualbox-rem"
-if {[have_spec muen]} { set virtualbox_binary "virtualbox-muen" }
 if {[have_spec nova]} { set virtualbox_binary "virtualbox-nova" }
 set virtualbox5_binary "virtualbox5-rem"
 if {[have_spec nova]} { set virtualbox5_binary "virtualbox5-nova" }
@@ -106,6 +105,7 @@ set build_components {
 	server/report_rom server/fs_rom server/vfs
 	server/tcp_terminal drivers/nic
 	lib/vfs/lwip lib/vfs/pipe lib/vfs/import
+	server/nic_router
 }
 
 #
@@ -115,7 +115,7 @@ foreach pkg {bash coreutils} {
 	lappend_if [expr ![file exists bin/$pkg]] build_components noux-pkg/$pkg }
 
 set boot_modules {
-	vfs fs_rom
+	vfs fs_rom nic_router
 	posix.lib.so bash.tar coreutils.tar
 	tcp_terminal vfs_lwip.lib.so vfs_pipe.lib.so vfs_import.lib.so
 	ipxe_nic_drv report_rom event_filter
@@ -125,10 +125,49 @@ set boot_modules {
 append boot_modules $vbox_file
 
 set config_of_app {
+
 	<start name="nic_drv" priority="-1">
 		<binary name="ipxe_nic_drv"/>
-		<resource name="RAM" quantum="4M"/>
-		<provides> <service name="Nic"/> </provides>
+		<resource name="RAM" quantum="8M"/>
+		<route>
+			<service name="Uplink"><child name="nic_router"/></service>
+			<any-service> <parent/> <any-child/> </any-service>
+		</route>
+	</start>
+
+	<start name="nic_router" caps="200">
+		<resource name="RAM" quantum="10M"/>
+		<provides>
+			<service name="Nic"/>
+			<service name="Uplink"/>
+		</provides>
+		<config verbose_domain_state="yes">
+
+			<policy label_prefix="nic_drv"      domain="uplink"/>
+			<policy label_prefix="tcp_terminal" domain="downlink"/>
+
+			<domain name="uplink">
+
+				<nat domain="downlink"
+				     tcp-ports="16384"
+				     udp-ports="16384"
+				     icmp-ids="16384"/>
+
+				<tcp-forward port="8888" domain="downlink" to="10.0.3.2"/>
+
+			</domain>
+
+			<domain name="downlink" interface="10.0.3.1/24">
+
+				<dhcp-server ip_first="10.0.3.2" ip_last="10.0.3.2" dns_config_from="uplink"/>
+
+				<tcp dst="0.0.0.0/0"><permit-any domain="uplink" /></tcp>
+				<udp dst="0.0.0.0/0"><permit-any domain="uplink" /></udp>
+				<icmp dst="0.0.0.0/0" domain="uplink"/>
+
+			</domain>
+
+		</config>
 	</start>
 
 	<start name="tcp_terminal" priority="-1" caps="200">
@@ -143,6 +182,10 @@ set config_of_app {
 			</vfs>
 			<libc stdout="/dev/log" socket="/socket" pipe="/pipe"/>
 		</config>
+		<route>
+			<service name="Nic"><child name="nic_router"/></service>
+			<any-service> <parent/> <any-child/> </any-service>
+		</route>
 	</start>
 
 	<start name="ram_fs_from" priority="-1">
@@ -240,6 +283,7 @@ set config_of_app {
 		<config>
 			<policy label="pointer -> hover"                    report="nitpicker -> hover"/>
 			<policy label="pointer -> xray"                     report="nitpicker -> xray"/>
+			<policy label="usb_hid_drv -> report"               report="usb_drv -> devices"/>
 			<policy label="usb_report_filter -> devices"        report="usb_drv -> devices"/>
 			<policy label="usb_report_filter -> usb_drv_config" report="usb_drv -> config"/>
 			<policy label="vbox1 -> usb_devices"                report="usb_report_filter -> usb_devices"/>
@@ -358,7 +402,7 @@ exec cp ${genode_dir}/repos/ports/run/$vbox_file bin/.
 
 build_boot_image $boot_modules
 
-set ip_match_string "address=(\[0-9\]+\.\[0-9\]+\.\[0-9\]+\.\[0-9\]+).*\n"
+set ip_match_string "nic_router\\\] \\\[uplink\\\] dynamic IP config: interface (\[0-9]{1,3}.\[0-9]{1,3}.\[0-9]{1,3}.\[0-9]{1,3}).*\n"
 
 #
 # Step 2: Read out TCP/IP address of tcp_terminal running on Genode target

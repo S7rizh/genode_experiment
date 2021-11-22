@@ -5,24 +5,24 @@
 #include <driver.h>
 #include <lx_emul.h>
 
-#include <lx_emul/extern_c_begin.h>
+#include <legacy/lx_emul/extern_c_begin.h>
 #include <linux/usb.h>
-#include <lx_emul/extern_c_end.h>
+#include <legacy/lx_emul/extern_c_end.h>
 
 #define TRACE do { ; } while (0)
 
-#include <lx_emul/impl/kernel.h>
-#include <lx_emul/impl/delay.h>
-#include <lx_emul/impl/work.h>
-#include <lx_emul/impl/spinlock.h>
-#include <lx_emul/impl/mutex.h>
-#include <lx_emul/impl/sched.h>
-#include <lx_emul/impl/timer.h>
-#include <lx_emul/impl/completion.h>
-#include <lx_emul/impl/wait.h>
-#include <lx_emul/impl/usb.h>
+#include <legacy/lx_emul/impl/kernel.h>
+#include <legacy/lx_emul/impl/delay.h>
+#include <legacy/lx_emul/impl/work.h>
+#include <legacy/lx_emul/impl/spinlock.h>
+#include <legacy/lx_emul/impl/mutex.h>
+#include <legacy/lx_emul/impl/sched.h>
+#include <legacy/lx_emul/impl/timer.h>
+#include <legacy/lx_emul/impl/completion.h>
+#include <legacy/lx_emul/impl/wait.h>
+#include <legacy/lx_emul/impl/usb.h>
 
-#include <lx_kit/backend_alloc.h>
+#include <legacy/lx_kit/backend_alloc.h>
 
 extern "C" int usb_match_device(struct usb_device *dev,
                                 const struct usb_device_id *id)
@@ -101,9 +101,18 @@ struct Lx_driver
 
 	Lx_driver(device_driver & drv) : dev_drv(drv) { list().insert(&le); }
 
-	bool match(struct device *dev) {
+	bool match(struct device *dev)
+	{
+		/*
+		 *  Don't try if buses don't match, since drivers often use 'container_of'
+		 *  which might cast the device to non-matching type
+		 */
+		if (dev_drv.bus != dev->bus)
+			return false;
+
 		return dev_drv.bus->match ? dev_drv.bus->match(dev, &dev_drv)
-		                          : false; }
+		                          : false;
+	}
 
 	int probe(struct device *dev)
 	{
@@ -119,22 +128,31 @@ struct Lx_driver
 	}
 };
 
+
 struct task_struct *current;
 struct workqueue_struct *system_wq;
 unsigned long jiffies;
 
-Genode::Ram_dataspace_capability Lx::backend_alloc(Genode::addr_t size, Genode::Cache_attribute cached) {
-	return Lx_kit::env().env().ram().alloc(size, cached); }
+
+Genode::Ram_dataspace_capability Lx::backend_alloc(Genode::addr_t size,
+                                                   Genode::Cache cache)
+{
+	return Lx_kit::env().env().ram().alloc(size, cache);
+}
+
 
 const char *dev_name(const struct device *dev) { return dev->name; }
 
+
 size_t strlen(const char *s) { return Genode::strlen(s); }
+
 
 int  mutex_lock_interruptible(struct mutex *m)
 {
 	mutex_lock(m);
 	return 0;
 }
+
 
 int driver_register(struct device_driver *drv)
 {
@@ -296,8 +314,22 @@ void *usb_alloc_coherent(struct usb_device *dev, size_t size, gfp_t mem_flags, d
 
 struct device *get_device(struct device *dev)
 {
-	//dev->ref++;
+	dev->ref++;
 	return dev;
+}
+
+
+void put_device(struct device *dev)
+{
+	if (dev->ref) {
+		dev->ref--;
+		return;
+	}
+
+	if (dev->release)
+		dev->release(dev);
+	else if (dev->type && dev->type->release)
+		dev->type->release(dev);
 }
 
 
@@ -309,7 +341,7 @@ void cdev_init(struct cdev *c, const struct file_operations *fops)
 
 void usb_free_coherent(struct usb_device *dev, size_t size, void *addr, dma_addr_t dma)
 {
-	//kfree(dev);
+	kfree(addr);
 }
 
 
@@ -611,3 +643,29 @@ void *kmemdup(const void *src, size_t size, gfp_t flags)
 
 	return addr;
 }
+
+/******************
+ ** linux/kref.h **
+ ******************/
+
+void kref_init(struct kref *kref)
+{ 
+	atomic_set(&kref->refcount, 1);
+}
+
+
+void kref_get(struct kref *kref)
+{
+	atomic_inc(&kref->refcount);
+}
+
+
+int  kref_put(struct kref *kref, void (*release) (struct kref *kref))
+{
+	if(!atomic_dec_return(&kref->refcount)) {
+		release(kref);
+		return 1;
+	}
+	return 0;
+}
+

@@ -18,9 +18,10 @@
 #include <platform_pd.h>
 #include <kernel/cpu.h>
 #include <kernel/vm.h>
+#include <kernel/main.h>
 
-namespace Kernel
-{
+namespace Kernel {
+
 	/**
 	 * ARM's virtual interrupt controller cpu interface
 	 */
@@ -39,7 +40,9 @@ namespace Kernel
 
 using namespace Kernel;
 
-struct Host_context {
+
+struct Host_context
+{
 	Cpu::Ttbr_64bit::access_t vttbr;
 	Cpu::Hcr::access_t        hcr;
 	Cpu::Hstr::access_t       hstr;
@@ -54,11 +57,11 @@ struct Host_context {
 	Cpu::Mair0::access_t      mair0;
 	Cpu::Dacr::access_t       dacr;
 	Cpu::Vmpidr::access_t     vmpidr;
+
 } vt_host_context;
 
 
-extern "C" void   kernel();
-extern "C" void   hypervisor_enter_vm(Genode::Vm_state&, Host_context&);
+extern "C" void hypervisor_enter_vm(Genode::Vm_state&, Host_context&);
 
 
 static Host_context & host_context(Cpu & cpu)
@@ -75,7 +78,7 @@ static Host_context & host_context(Cpu & cpu)
 		c.mair0  = Cpu::Mair0::read();
 		c.dacr   = Cpu::Dacr::read();
 		c.vmpidr = Cpu::Mpidr::read();
-		c.ip     = (addr_t) &kernel;
+		c.ip     = (addr_t)&Kernel::main_handle_kernel_entry;
 		c.vttbr  = 0;
 		c.hcr    = 0;
 		c.hstr   = 0;
@@ -87,30 +90,37 @@ static Host_context & host_context(Cpu & cpu)
 
 
 Board::Vcpu_context::Vm_irq::Vm_irq(unsigned const irq, Cpu & cpu)
-: Kernel::Irq(irq, cpu.irq_pool())
+:
+	Kernel::Irq { irq, cpu.irq_pool(), cpu.pic() },
+	_cpu        { cpu }
 { }
 
 
-void Board::Vcpu_context::Vm_irq::handle(Cpu &, Vm & vm, unsigned irq) {
+void Board::Vcpu_context::Vm_irq::handle(Vm & vm, unsigned irq) {
 	vm.inject_irq(irq); }
 
 
 void Board::Vcpu_context::Vm_irq::occurred()
 {
-	Cpu & cpu = Kernel::cpu_pool().executing_cpu();
-	Vm *vm = dynamic_cast<Vm*>(&cpu.scheduled_job());
+	Vm *vm = dynamic_cast<Vm*>(&_cpu.scheduled_job());
 	if (!vm) Genode::raw("VM interrupt while VM is not runnning!");
-	else     handle(cpu, *vm, _irq_nr);
+	else     handle(*vm, _irq_nr);
 }
 
 
 Board::Vcpu_context::Pic_maintainance_irq::Pic_maintainance_irq(Cpu & cpu)
-: Board::Vcpu_context::Vm_irq(Board::VT_MAINTAINANCE_IRQ, cpu) {
+:
+	Board::Vcpu_context::Vm_irq(Board::VT_MAINTAINANCE_IRQ, cpu)
+{
 	//FIXME Irq::enable only enables caller cpu
-	cpu.pic().unmask(_irq_nr, cpu.id()); }
+	cpu.pic().unmask(_irq_nr, cpu.id());
+}
+
 
 Board::Vcpu_context::Virtual_timer_irq::Virtual_timer_irq(Cpu & cpu)
-: irq(Board::VT_TIMER_IRQ, cpu) {}
+:
+	irq(Board::VT_TIMER_IRQ, cpu)
+{ }
 
 
 void Board::Vcpu_context::Virtual_timer_irq::enable() { irq.enable(); }
@@ -124,18 +134,21 @@ void Board::Vcpu_context::Virtual_timer_irq::disable()
 }
 
 
-Kernel::Vm::Vm(unsigned                 cpu,
+Kernel::Vm::Vm(Irq::Pool              & user_irq_pool,
+               Cpu                    & cpu,
                Genode::Vm_state       & state,
                Kernel::Signal_context & context,
                Identity               & id)
-: Kernel::Object { *this },
-  Cpu_job(Cpu_priority::MIN, 0),
-  _state(state),
-  _context(context),
-  _id(id),
-  _vcpu_context(cpu_pool().cpu(cpu))
+:
+	Kernel::Object { *this },
+	Cpu_job(Cpu_priority::min(), 0),
+	_user_irq_pool(user_irq_pool),
+	_state(state),
+	_context(context),
+	_id(id),
+	_vcpu_context(cpu)
 {
-	affinity(cpu_pool().cpu(cpu));
+	affinity(cpu);
 }
 
 
@@ -144,7 +157,7 @@ void Kernel::Vm::exception(Cpu & cpu)
 	switch(_state.cpu_exception) {
 	case Genode::Cpu_state::INTERRUPT_REQUEST:
 	case Genode::Cpu_state::FAST_INTERRUPT_REQUEST:
-		_interrupt(cpu.id());
+		_interrupt(_user_irq_pool, cpu.id());
 		break;
 	default:
 		pause();

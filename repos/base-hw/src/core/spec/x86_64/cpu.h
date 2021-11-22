@@ -17,23 +17,30 @@
 #ifndef _CORE__SPEC__X86_64__CPU_H_
 #define _CORE__SPEC__X86_64__CPU_H_
 
-/* Genode includes */
+/* base includes */
 #include <util/register.h>
 #include <kernel/interface_support.h>
 #include <cpu/cpu_state.h>
 
+/* base-hw internal includes */
 #include <hw/spec/x86_64/cpu.h>
 
-/* base includes */
+/* base internal includes */
 #include <base/internal/align_at.h>
-#include <base/internal/unmanaged_singleton.h>
 
-/* core includes */
-#include <fpu.h>
+/* base-hw Core includes */
+#include <spec/x86_64/fpu.h>
+#include <spec/x86_64/address_space_id_allocator.h>
+#include <spec/x86_64/translation_table.h>
 
 namespace Kernel { struct Thread_fault; }
 
+
+namespace Board { class Address_space_id_allocator; }
+
+
 namespace Genode {
+
 	class Cpu;
 	using sizet_arithm_t = __uint128_t;
 }
@@ -41,8 +48,6 @@ namespace Genode {
 
 class Genode::Cpu : public Hw::X86_64_cpu
 {
-	protected:
-
 	public:
 
 		/**
@@ -108,7 +113,8 @@ class Genode::Cpu : public Hw::X86_64_cpu
 		{
 			addr_t cr3;
 
-			Mmu_context(addr_t page_table_base);
+			Mmu_context(addr_t page_table_base,
+			            Board::Address_space_id_allocator &);
 		};
 
 		/**

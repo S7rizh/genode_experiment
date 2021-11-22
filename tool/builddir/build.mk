@@ -31,6 +31,7 @@
 #                 there is no need to change it.
 #
 # CONTRIB_DIR   - location of ported 3rd-party source codes
+# CCACHE        - if set to 'yes', the build system uses the compiler cache
 #
 # REQUIRED_GCC_VERSION - GCC version required for building Genode
 #
@@ -66,9 +67,6 @@ export ECHO             ?= echo -e
 export CONTRIB_DIR
 export BOARD
 
-# Force stable sorting order
-export LC_COLLATE=C
-
 #
 # Convert user-defined directories to absolute directories
 #
@@ -86,12 +84,16 @@ BASE_DIR     := $(realpath $(shell echo $(BASE_DIR)))
 export SHELL := $(shell which bash)
 
 #
+# Discharge variables evaluated by ccache mechanism that may be inherited when
+# using the build system in a nested fashion.
+#
+undefine CUSTOM_CXX
+undefine CUSTOM_CC
+
+#
 # Fetch SPECS configuration from all source repositories and the build directory
 #
 SPECS :=
-ifneq ($(BOARD),)
-SPECS += $(BOARD)
-endif
 -include $(foreach REP,$(REPOSITORIES),$(wildcard $(REP)/etc/specs.conf))
 -include $(BUILD_BASE_DIR)/etc/specs.conf
 
@@ -121,7 +123,7 @@ export SPECS
 
 include $(BASE_DIR)/mk/global.mk
 
-export LIBGCC_INC_DIR = $(shell dirname `$(CUSTOM_CXX_LIB) -print-libgcc-file-name`)/include
+export LIBGCC_INC_DIR := $(shell dirname `$(CUSTOM_CXX_LIB) -print-libgcc-file-name`)/include
 
 #
 # Find out about the target directories to build
@@ -133,12 +135,17 @@ DST_DIRS := *
 endif
 
 #
+# Helper function to check if a needed tool is installed
+#
+check_tool = $(if $(shell which $(1)),,$(error Need to have '$(1)' installed.))
+
+#
 # Tool chain version check
 #
 # Empty DST_DIRS is interpreted as a tool-chain agnostic target, e.g., clean.
 #
 ifneq ($(DST_DIRS),)
-REQUIRED_GCC_VERSION ?= 8.3.0
+REQUIRED_GCC_VERSION ?= 10.3.0
 GCC_VERSION := $(filter $(REQUIRED_GCC_VERSION) ,$(shell $(CUSTOM_CXX) --version))
 ifneq ($(GCC_VERSION), $(REQUIRED_GCC_VERSION))
 $(error "$(CUSTOM_CXX) version $(REQUIRED_GCC_VERSION) is required")
@@ -146,7 +153,6 @@ endif
 endif
 
 ifneq ($(STATIC_ANALYZE),)
-check_tool = $(if $(shell which $(1)),,$(error Need to have '$(1)' installed.))
 $(call check_tool,scan-build)
 
 MAKE := scan-build --use-c++=$(CUSTOM_CXX) --use-cc=$(CUSTOM_CC) $(MAKE)
@@ -313,6 +319,69 @@ gen_deps_and_build_targets: $(INSTALL_DIR) $(DEBUG_DIR) $(LIB_DEP_FILE)
 again: $(INSTALL_DIR) $(DEBUG_DIR)
 	@$(VERBOSE_MK)$(MAKE) $(VERBOSE_DIR) -f $(LIB_DEP_FILE) all
 
+#
+# Read tools configuration to obtain the cross-compiler prefix passed
+# to the run script.
+#
+-include $(call select_from_repositories,etc/tools.conf)
+
+
+##
+## Compiler-cache support
+##
+
+#
+# To hook the ccache into the build process, the compiler executables are
+# shadowed by symlinks named after the compiler but pointing to the ccache
+# program. When invoked, the ccache program uses argv0 to query the real
+# compiler executable.
+#
+# If the configured tool-chain path is absolute, we assume that it is not
+# already part of the PATH variable. In this (default) case, we supplement the
+# tool-chain path to the CCACHE_PATH as evaluated by the ccache program.
+#
+# Should the tool-chain path not be absolute, the tool-chain executables must
+# already be reachable via the regular PATH variable. Otherwise, the build
+# would not work without ccache either.
+#
+
+ifeq ($(CCACHE),yes)
+
+$(call check_tool,ccache)
+
+ifneq ($(dir $(CUSTOM_CXX)),$(dir $(CUSTOM_CC)))
+$(error ccache enabled but the compilers $(CUSTOM_CXX) and $(CUSTOM_CC)\
+        reside in different directories)
+endif
+
+CCACHE_TOOL_DIR    := $(addsuffix /var/tool/ccache,$(BUILD_BASE_DIR))
+CCACHED_CUSTOM_CC  := $(CCACHE_TOOL_DIR)/$(notdir $(CUSTOM_CC))
+CCACHED_CUSTOM_CXX := $(CCACHE_TOOL_DIR)/$(notdir $(CUSTOM_CXX))
+
+gen_deps_and_build_targets: $(CCACHED_CUSTOM_CC) $(CCACHED_CUSTOM_CXX)
+
+# create ccache symlinks at var/tool/ccache/
+$(CCACHED_CUSTOM_CC) $(CCACHED_CUSTOM_CXX):
+	$(VERBOSE_MK)mkdir -p $(dir $@)
+	$(VERBOSE_MK)ln -sf `which ccache` $@
+
+# supplement tool-chain directory to the search-path variable used by ccache
+ifneq ($(filter /%,$(CUSTOM_CXX)),)
+export CCACHE_PATH := $(dir $(CUSTOM_CXX)):$(PATH)
+endif
+
+# force preprocessor mode
+export CCACHE_NODIRECT=1
+
+# override CUSTOM_CC and CUSTOM_CXX to point to the ccache symlinks
+export CUSTOM_CC  := $(CCACHED_CUSTOM_CC)
+export CUSTOM_CXX := $(CCACHED_CUSTOM_CXX)
+
+RUN_OPT_CCACHE := --ccache
+
+endif
+
+
 ##
 ## Rules for running automated test cases
 ##
@@ -321,12 +390,6 @@ RUN_OPT ?=
 
 # helper for run/% rule
 RUN_SCRIPT = $(call select_from_repositories,run/$*.run)
-
-#
-# Read tools configuration to obtain the cross-compiler prefix passed
-# to the run script.
-#
--include $(call select_from_repositories,etc/tools.conf)
 
 run/%: $(call select_from_repositories,run/%.run) $(RUN_ENV)
 	$(VERBOSE)test -f "$(RUN_SCRIPT)" || (echo "Error: No run script for $*"; exit -1)
@@ -338,6 +401,7 @@ run/%: $(call select_from_repositories,run/%.run) $(RUN_ENV)
 	                                     --cross-dev-prefix "$(CROSS_DEV_PREFIX)" \
 	                                     --qemu-args "$(QEMU_OPT)" \
 	                                     --make "$(MAKE)" \
+	                                     $(RUN_OPT_CCACHE) \
 	                                     $(RUN_OPT) \
 	                                     --include $(RUN_SCRIPT)
 

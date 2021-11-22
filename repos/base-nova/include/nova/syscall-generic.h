@@ -592,10 +592,11 @@ namespace Nova {
 				} gdtr, idtr;
 				unsigned long long tsc_val, tsc_off;
 			} __attribute__((packed));
+			mword_t mr[(4096 - 4 * sizeof(mword_t)) / sizeof(mword_t)];
 		};
 
 		/* message payload */
-		mword_t * msg() { return reinterpret_cast<mword_t *>(&mtd); }
+		mword_t * msg() { return mr; }
 
 		struct Item {
 			mword_t crd;
@@ -747,7 +748,9 @@ namespace Nova {
 		}
 
 		mword_t mtd_value() const { return static_cast<Mtd>(mtd).value(); }
-	} __attribute__((packed));
+	};
+
+	static_assert(sizeof(Utcb) == 4096, "Unexpected size of UTCB");
 
 	/**
 	 * Size of event-specific portal window mapped at PD creation time
@@ -756,7 +759,8 @@ namespace Nova {
 		NUM_INITIAL_PT_LOG2 = 5,
 		NUM_INITIAL_PT = 1UL << NUM_INITIAL_PT_LOG2,
 		NUM_INITIAL_PT_RESERVED = 2 * NUM_INITIAL_PT,
-		NUM_INITIAL_VCPU_PT_LOG2 = 8, 
+		NUM_INITIAL_VCPU_PT_LOG2 = 8,
+		NUM_INITIAL_VCPU_PT = 1UL << NUM_INITIAL_VCPU_PT_LOG2,
 	};
 
 	/**

@@ -1,9 +1,10 @@
 TARGET  := usb_modem_drv
 SRC_C   := dummies.c lxc.c
-SRC_CC  := main.cc lx_emul.cc component.cc terminal.cc
-SRC_CC  += printf.cc timer.cc scheduler.cc malloc.cc env.cc work.cc
+SRC_CC  := main.cc lx_emul.cc terminal.cc fec_nic.cc
+SRC_CC  += printf.cc bug.cc timer.cc scheduler.cc malloc.cc env.cc work.cc
+SRC_CC  += uplink_client.cc
 
-LIBS    := base usb_modem_include lx_kit_setjmp
+LIBS    := base usb_modem_include lx_kit_setjmp nic_driver
 
 USB_CONTRIB_DIR := $(call select_from_ports,dde_linux)/src/drivers/usb_modem
 
@@ -25,4 +26,4 @@ CC_C_OPT += -Wno-comment -Wno-int-conversion -Wno-incompatible-pointer-types \
 CC_CXX_WARN_STRICT =
 
 vpath %.c  $(USB_CONTRIB_DIR)
-vpath %.cc $(REP_DIR)/src/lx_kit
+vpath %.cc $(REP_DIR)/src/lib/legacy/lx_kit

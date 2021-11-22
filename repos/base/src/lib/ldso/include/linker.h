@@ -116,11 +116,6 @@ namespace Linker {
 	             Keep keep);
 
 	/**
-	 * Returns the head of the global object list
-	 */
-	Object *obj_list_head();
-
-	/**
 	 * Returns the root-dependeny of the dynamic binary
 	 */
 	Dependency *binary_root_dep();
@@ -129,6 +124,11 @@ namespace Linker {
 	 * Global ELF access mutex
 	 */
 	Mutex &mutex();
+
+	/**
+	 * Mutex that protects shared object list
+	 */
+	Mutex &shared_object_mutex();
 }
 
 
@@ -146,6 +146,7 @@ class Linker::Object : private Fifo<Object>::Element,
 	public:
 
 		typedef String<128> Name;
+		class   Object_list;
 
 	protected:
 
@@ -156,6 +157,8 @@ class Linker::Object : private Fifo<Object>::Element,
 		Name        _name       { };
 		File const *_file       { nullptr };
 		Elf::Addr   _reloc_base { 0 };
+
+		static Object_list &_object_list();
 
 	public:
 
@@ -172,6 +175,41 @@ class Linker::Object : private Fifo<Object>::Element,
 			_reloc_base = file.reloc_base;
 		}
 
+		class Object_list
+		{
+			private:
+
+				Fifo<Object> _fifo  { };
+				Mutex        _mutex { };
+
+			public:
+
+				void enqueue(Object &obj)
+				{
+					Mutex::Guard guard(_mutex);
+					_fifo.enqueue(obj);
+				}
+
+				void remove(Object &obj)
+				{
+					Mutex::Guard guard(_mutex);
+					_fifo.remove(obj);
+				}
+
+				template <typename FUNC>
+				void for_each(FUNC const &func)
+				{
+					Mutex::Guard guard(_mutex);
+					_fifo.for_each(func);
+				}
+		};
+
+		template <typename FUNC>
+		static void with_object_list(FUNC const func)
+		{
+			func(_object_list());
+		}
+
 		virtual ~Object() { }
 
 		Elf::Addr        reloc_base() const { return _reloc_base; }
@@ -185,14 +223,15 @@ class Linker::Object : private Fifo<Object>::Element,
 		virtual void relocate(Bind) = 0;
 
 		virtual bool keep() const = 0;
+		virtual void force_keep() = 0;
 
 		virtual void load() = 0;
 		virtual bool unload() { return false;}
 
 		/**
-		 * Next object in global object list
+		 * Did this ELF require loading or was it present already
 		 */
-		virtual Object *next_obj() const = 0;
+		virtual bool already_present() const { return false; }
 
 		/**
 		 * Next object in initialization list
@@ -221,6 +260,19 @@ class Linker::Object : private Fifo<Object>::Element,
 
 		bool needs_static_construction();
 };
+
+
+namespace Linker {
+	/**
+	 * Apply func to each object
+	 */
+	template <typename FUNC>
+	void for_each_object(FUNC const &func)
+	{
+		Object::with_object_list([&] (Object::Object_list &list) {
+			list.for_each(func); });
+	}
+}
 
 
 /**

@@ -19,14 +19,17 @@
 #include <spec/arm/cpu_support.h>
 #include <kernel/interface.h>
 
+
 constexpr unsigned Hw::Page_table::Descriptor_base::_device_tex() {
 	return 0; }
 
+
 constexpr bool Hw::Page_table::Descriptor_base::_smp() { return false; }
+
 
 void Hw::Page_table::_table_changed(unsigned long addr, unsigned long size)
 {
-	Genode::Arm_cpu::clean_data_cache_by_virt_region(addr, size);
+	Genode::Arm_cpu::cache_clean_data_region(addr, size);
 }
 
 #endif /* _CORE__SPEC__ARM_V6__TRANSLATION_TABLE_H_ */

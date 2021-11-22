@@ -602,6 +602,21 @@ bool sg_miter_skip(struct sg_mapping_iter *miter, off_t offset) { TRACE; return 
 bool sg_miter_next(struct sg_mapping_iter *miter) { TRACE; return false; }
 void sg_miter_stop(struct sg_mapping_iter *miter) { TRACE; }
 
+size_t sg_pcopy_from_buffer(struct scatterlist *sgl, unsigned int nents,
+                            const void *buf, size_t buflen, off_t skip)
+{
+	TRACE;
+	return 0;
+}
+
+
+size_t sg_pcopy_to_buffer(struct scatterlist *sgl, unsigned int nents,
+                          void *buf, size_t buflen, off_t skip)
+{
+	TRACE;
+	return 0;
+}
+
 
 /*************************
  ** linux/dma-mapping.h **
@@ -840,7 +855,6 @@ int      of_device_is_compatible(const struct device_node *device, const char *c
  ** linux/property.h **
  **********************/
 
-bool device_property_read_bool(struct device *dev, const char *propname) { TRACE; return false; }
 int  device_property_read_u8(struct device *dev, const char *propname, u8 *val) { TRACE; return 0; }
 
 int  device_property_read_u32(struct device *dev, const char *propname, u32 *val) { TRACE; return 0; }
@@ -949,12 +963,6 @@ ktime_t ktime_mono_to_real(ktime_t mono)
 	return -1;
 }
 
-bool mod_delayed_work(struct workqueue_struct *q, struct delayed_work *w, unsigned long v)
-{
-	TRACE;
-	return false;
-}
-
 int  mutex_lock_killable(struct mutex *lock)
 {
 	TRACE_AND_STOP;
@@ -984,23 +992,6 @@ void pci_free_irq_vectors(struct pci_dev *dev)
 }
 
 int pci_reset_function_locked(struct pci_dev *dev)
-{
-	TRACE_AND_STOP;
-	return -1;
-}
-
-void reinit_completion(struct completion *x)
-{
-	TRACE_AND_STOP;
-}
-
-size_t sg_pcopy_from_buffer(struct scatterlist *sgl, unsigned int nents, const void *buf, size_t buflen, off_t skip)
-{
-	TRACE_AND_STOP;
-	return -1;
-}
-
-size_t sg_pcopy_to_buffer(struct scatterlist *sgl, unsigned int nents, void *buf, size_t buflen, off_t skip)
 {
 	TRACE_AND_STOP;
 	return -1;

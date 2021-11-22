@@ -52,6 +52,7 @@ proc run_power_on { } {
 	if {[have_spec x86_64]} { set qemu "qemu-system-x86_64" }
 	if {[have_spec arm]}    { set qemu "qemu-system-arm" }
 	if {[have_spec arm_64]} { set qemu "qemu-system-aarch64" }
+	if {[have_spec riscv]}  { set qemu "qemu-system-riscv64" }
 
 	#
 	# Only the x86_64 variant of Qemu provides the emulation of hardware
@@ -71,7 +72,7 @@ proc run_power_on { } {
 		# In the raspi3 model the first UART is never used as
 		# log output, but the second
 		#
-		if {[have_spec rpi3]} { append qemu_args " -serial null " }
+		if {[have_board rpi3]} { append qemu_args " -serial null " }
 		append qemu_args " -serial mon:stdio "
 	}
 
@@ -93,7 +94,7 @@ proc run_power_on { } {
 	}
 
 	# tweak emulated platform for specific platforms
-	if {[have_spec pbxa9]}  {
+	if {[have_board pbxa9]}  {
 		#
 		# For PBXA9 qemu adjusts provided RAM chips to the -m arg. Thus we
 		# filter user values and force value that enables all chips that Genode
@@ -103,11 +104,11 @@ proc run_power_on { } {
 		append qemu_args " -m 768"
 		append qemu_args " -M realview-pbx-a9"
 	}
-	if {[have_spec vpb926]} { append qemu_args " -M versatilepb     -m 128 " }
-	if {[have_spec zynq_qemu]}   { append qemu_args " -M xilinx-zynq-a9 -cpu cortex-a9 -m 256 " }
-	if {[have_spec rpi3]}   { append qemu_args " -M raspi3 -m 512 " }
+	if {[have_board vpb926]} { append qemu_args " -M versatilepb     -m 128 " }
+	if {[have_board zynq_qemu]}   { append qemu_args " -M xilinx-zynq-a9 -cpu cortex-a9 -m 256 " }
+	if {[have_board rpi3]}   { append qemu_args " -M raspi3 -m 512 " }
 
-	if {[have_spec virt_qemu]} {
+	if {[have_board virt_qemu]} {
 		append qemu_args " -M virt,virtualization=true"
 		if {[have_spec arm_v8a]} {
 			append qemu_args ",gic-version=3 -cpu cortex-a53 -smp 4"
@@ -119,15 +120,29 @@ proc run_power_on { } {
 	}
 
 	# on x86, we support booting via pxe or iso/disk image
-	if {[have_spec x86]} {
-		if {![regexp -- {-m} $qemu_args dummy]} {
-			if {[have_spec okl4]} {
-				# okl4 system integration specifies RAM from 32 to 800 MiB
-				append qemu_args " -m 800 "
-			} else {
-				append qemu_args " -m 512 "
+	if {[have_board pc]} {
+		if {[have_spec okl4]} {
+			# okl4 system integration specifies RAM from 32 to 800 MiB
+			set qemu_ram 800
+		} else {
+			set qemu_ram 512
+		}
+
+		if {[regexp -- {-m} $qemu_args dummy]} {
+			set qemu_ram [regexp -inline {\-m.[0-9]+} $qemu_args]
+			set qemu_ram [regexp -inline {[0-9]+} $qemu_ram]
+		}
+
+		if {[have_spec okl4]} {
+			if {$qemu_ram < 800} {
+				puts "Configured memory ($qemu_ram) for OKL4 on Qemu must be at least 800M\n"
+				exit 1
 			}
 		}
+
+		append qemu_args " -m $qemu_ram "
+
+
 		if {[have_include "load/tftp"]} {
 			append qemu_args " -boot n -tftp [run_dir] -bootp boot/pulsar -no-reboot -no-shutdown "
 		} else {
@@ -155,8 +170,14 @@ proc run_power_on { } {
 		append qemu_args " -machine q35 "
 	}
 
-	# on ARM, we supply the boot image as kernel
-	if {[have_spec arm] || [have_spec arm_v8]} { append qemu_args " -kernel [run_dir]/boot/image.elf " }
+	if {[have_board riscv_qemu]} {
+		append qemu_args " -m 128 -machine virt -cpu rv64,priv_spec=v1.10.0 "
+		append qemu_args " -bios default "
+	}
+
+	# on ARM/RISC-V, we supply the boot image as kernel
+	if {[have_spec arm] || [have_spec arm_v8] || [have_spec riscv]} {
+		append qemu_args " -kernel [run_dir]/boot/image.elf " }
 
 	eval spawn $qemu $qemu_args
 	set qemu_spawn_id $spawn_id

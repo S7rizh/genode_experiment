@@ -18,29 +18,18 @@
 #include <util/arg_string.h>
 #include <util/xml_generator.h>
 
+/* OpenSSL includes */
+#include <openssl/sha.h>
+
 /* CBE includes */
 #include <cbe/vfs/io_job.h>
 
+/* local includes */
+#include <aes_256.h>
 
-static void xor_bytes(unsigned char const *p, int p_len,
-                      unsigned char *k, int k_len)
-{
-	for (int i = 0; i < k_len; i++) {
-		k[i] ^= p[i % p_len];
-	}
-}
-
-
-static void fill_bytes(unsigned char *v, int v_len)
-{
-	static unsigned char _fill_counter = 0x23;
-
-	for (int i = 0; i < v_len; i++) {
-		v[i] = _fill_counter;
-	}
-
-	++_fill_counter;
-}
+enum { PRIVATE_KEY_SIZE = 32 };
+enum { PASSPHRASE_HASH_SIZE = 32 };
+enum { VERBOSE = 0 };
 
 
 namespace Vfs_cbe_trust_anchor {
@@ -65,8 +54,8 @@ class Trust_anchor
 
 		using Path = Genode::Path<256>;
 
-		Path const key_file_name  { "keyfile" };
-		Path const hash_file_name { "secured_superblock" };
+		Path const key_file_name  { "encrypted_private_key" };
+		Path const hash_file_name { "superblock_hash" };
 
 		struct Complete_request
 		{
@@ -105,15 +94,24 @@ class Trust_anchor
 		};
 		Job _job { Job::NONE };
 
-		enum class Job_state { NONE, PENDING, IN_PROGRESS, COMPLETE };
+		enum class Job_state
+		{
+			NONE,
+			INIT_READ_JITTERENTROPY_PENDING,
+			INIT_READ_JITTERENTROPY_IN_PROGRESS,
+			PENDING,
+			IN_PROGRESS,
+			FINAL_SYNC,
+			COMPLETE
+		};
+
 		Job_state _job_state { Job_state::NONE };
 
 		bool _job_success { false };
 
 		struct Private_key
 		{
-			enum { KEY_LEN = 32 };
-			unsigned char value[KEY_LEN] { };
+			unsigned char value[PRIVATE_KEY_SIZE] { };
 		};
 		Private_key _private_key { };
 
@@ -135,25 +133,58 @@ class Trust_anchor
 		Key _encrypt_key   { };
 		Key _generated_key { };
 
-		void _xcrypt_key(Private_key const &priv_key, Key &key)
-		{
-			xor_bytes(priv_key.value, (int)Private_key::KEY_LEN,
-			          key.value,      (int)Key::KEY_LEN);
-		}
-
-		void _fill_key(Key &key)
-		{
-			fill_bytes(key.value, (int)Key::KEY_LEN);
-		}
-
-		bool _execute_xcrypt(Key &key)
+		bool _execute_encrypt()
 		{
 			switch (_job_state) {
 			case Job_state::PENDING:
-				_xcrypt_key(_private_key, key);
+			{
+				Key key_plaintext { };
+				Genode::memcpy(
+					key_plaintext.value, _encrypt_key.value, Key::KEY_LEN);
+
+				Aes_256::encrypt_with_zeroed_iv(
+					_encrypt_key.value,
+					Key::KEY_LEN,
+					key_plaintext.value,
+					_private_key.value,
+					PRIVATE_KEY_SIZE);
+
 				_job_state = Job_state::COMPLETE;
 				_job_success = true;
 				[[fallthrough]];
+			}
+			case Job_state::COMPLETE:
+				return true;
+
+			case Job_state::IN_PROGRESS: [[fallthrough]];
+			case Job_state::NONE:        [[fallthrough]];
+			default:                     return false;
+			}
+
+			/* never reached */
+			return false;
+		}
+
+		bool _execute_decrypt()
+		{
+			switch (_job_state) {
+			case Job_state::PENDING:
+			{
+				Key key_ciphertext { };
+				Genode::memcpy(
+					key_ciphertext.value, _decrypt_key.value, Key::KEY_LEN);
+
+				Aes_256::decrypt_with_zeroed_iv(
+					_decrypt_key.value,
+					Key::KEY_LEN,
+					key_ciphertext.value,
+					_private_key.value,
+					PRIVATE_KEY_SIZE);
+
+				_job_state = Job_state::COMPLETE;
+				_job_success = true;
+				[[fallthrough]];
+			}
 			case Job_state::COMPLETE:
 				return true;
 
@@ -168,22 +199,47 @@ class Trust_anchor
 
 		bool _execute_generate(Key &key)
 		{
+			bool progress = false;
+
 			switch (_job_state) {
 			case Job_state::PENDING:
-				_fill_key(key);
+			{
+				if (!_open_jitterentropy_file_and_queue_read()) {
+					break;
+				}
+				_job_state = Job_state::IN_PROGRESS;
+				progress = true;
+			}
+			[[fallthrough]];
+
+			case Job_state::IN_PROGRESS:
+			{
+				if (!_read_jitterentropy_file_finished()) {
+					break;
+				}
+				if (_jitterentropy_io_job_buffer.size != (size_t)Key::KEY_LEN) {
+					class Bad_jitterentropy_io_buffer_size { };
+					throw Bad_jitterentropy_io_buffer_size { };
+				}
+				Genode::memcpy(key.value,
+				               _jitterentropy_io_job_buffer.base,
+				               _jitterentropy_io_job_buffer.size);
+
 				_job_state = Job_state::COMPLETE;
 				_job_success = true;
-				[[fallthrough]];
+				progress = true;
+			}
+
+			[[fallthrough]];
 			case Job_state::COMPLETE:
 				return true;
 
-			case Job_state::IN_PROGRESS: [[fallthrough]];
 			case Job_state::NONE:        [[fallthrough]];
-			default:                     return false;
+			default:                     break;
 			}
 
 			/* never reached */
-			return false;
+			return progress;
 		}
 
 		bool _execute_unlock()
@@ -207,22 +263,40 @@ class Trust_anchor
 				if (!_read_key_file_finished()) {
 					break;
 				}
+				if (_key_io_job_buffer.size == Aes_256_key_wrap::CIPHERTEXT_SIZE) {
 
-				Private_key key { };
+					bool private_key_corrupt;
+					Aes_256_key_wrap::unwrap_key(
+						_private_key.value,
+						sizeof(_private_key.value),
+						private_key_corrupt,
+						(unsigned char *)_key_io_job_buffer.base,
+						_key_io_job_buffer.size,
+						(unsigned char *)_passphrase_hash_buffer.base,
+						_passphrase_hash_buffer.size);
 
-				/* copy passphrase to key object */
-				size_t const key_len =
-					Genode::min(_key_io_job_buffer.size,
-					            sizeof (key.value));
+					if (private_key_corrupt) {
 
-				Genode::memset(key.value, 0xa5, sizeof (key.value));
-				Genode::memcpy(key.value, _key_io_job_buffer.buffer, key_len);
+						Genode::error("failed to unwrap the private key");
+						_job_success = false;
 
-				_job_state   = Job_state::COMPLETE;
-				_job_success = Genode::memcmp(_private_key.value, key.value,
-				                              sizeof (key.value));
+					} else {
 
-				progress |= true;
+						_job_success = true;
+					}
+					_job_state = Job_state::COMPLETE;
+					progress = true;
+
+				} else {
+
+					Genode::error(
+						"content read from file 'encrypted_private_key' "
+						"has unexpected size");
+
+					_job_state   = Job_state::COMPLETE;
+					_job_success = false;
+					progress = true;
+				}
 			}
 
 			[[fallthrough]];
@@ -241,6 +315,42 @@ class Trust_anchor
 			bool progress = false;
 
 			switch (_job_state) {
+			case Job_state::INIT_READ_JITTERENTROPY_PENDING:
+			{
+				if (!_open_private_key_file_and_queue_read()) {
+					break;
+				}
+				_job_state = Job_state::INIT_READ_JITTERENTROPY_IN_PROGRESS;
+				progress = true;
+			}
+			[[fallthrough]];
+			case Job_state::INIT_READ_JITTERENTROPY_IN_PROGRESS:
+			{
+				if (!_read_private_key_file_finished()) {
+					break;
+				}
+				if (_private_key_io_job_buffer.size != (size_t)PRIVATE_KEY_SIZE) {
+					class Bad_private_key_io_buffer_size { };
+					throw Bad_private_key_io_buffer_size { };
+				}
+				Genode::memcpy(
+					_private_key.value,
+					_private_key_io_job_buffer.base,
+					_private_key_io_job_buffer.size);
+
+				_key_io_job_buffer.size = Aes_256_key_wrap::CIPHERTEXT_SIZE;
+				Aes_256_key_wrap::wrap_key(
+					(unsigned char *)_key_io_job_buffer.base,
+					_key_io_job_buffer.size,
+					(unsigned char *)_private_key_io_job_buffer.base,
+					_private_key_io_job_buffer.size,
+					(unsigned char *)_passphrase_hash_buffer.base,
+					_passphrase_hash_buffer.size);
+
+				_job_state = Job_state::PENDING;
+				progress = true;
+			}
+			[[fallthrough]];
 			case Job_state::PENDING:
 			{
 				if (!_open_key_file_and_write(_base_path)) {
@@ -249,20 +359,24 @@ class Trust_anchor
 					return true;
 				}
 
-				/* copy passphrase to key object */
-				size_t const key_len =
-					Genode::min(_key_io_job_buffer.size,
-					            sizeof (_private_key.value));
-				Genode::memset(_private_key.value, 0xa5, sizeof (_private_key.value));
-				Genode::memcpy(_private_key.value, _key_io_job_buffer.buffer, key_len);
-
 				_job_state = Job_state::IN_PROGRESS;
 				progress |= true;
 			}
 
 			[[fallthrough]];
 			case Job_state::IN_PROGRESS:
-				if (!_write_key_file_finished()) {
+				if (!_write_op_on_key_file_is_in_final_sync_step()) {
+					break;
+				}
+
+				_job_state   = Job_state::FINAL_SYNC;
+				_job_success = true;
+
+				progress |= true;
+			[[fallthrough]];
+			case Job_state::FINAL_SYNC:
+
+				if (!_final_sync_of_write_op_on_key_file_finished()) {
 					break;
 				}
 
@@ -351,7 +465,18 @@ class Trust_anchor
 			}
 			[[fallthrough]];
 			case Job_state::IN_PROGRESS:
-				if (!_write_hash_file_finished()) {
+				if (!_write_op_on_hash_file_is_in_final_sync_step()) {
+					break;
+				}
+
+				_job_state   = Job_state::FINAL_SYNC;
+				_job_success = true;
+
+				progress |= true;
+			[[fallthrough]];
+			case Job_state::FINAL_SYNC:
+
+				if (!_final_sync_of_write_op_on_hash_file_finished()) {
 					break;
 				}
 
@@ -373,8 +498,8 @@ class Trust_anchor
 		bool _execute()
 		{
 			switch (_job) {
-			case Job::DECRYPT:     return _execute_xcrypt(_decrypt_key);
-			case Job::ENCRYPT:     return _execute_xcrypt(_encrypt_key);
+			case Job::DECRYPT:     return _execute_decrypt();
+			case Job::ENCRYPT:     return _execute_encrypt();
 			case Job::GENERATE:    return _execute_generate(_generated_key);
 			case Job::INIT:        return _execute_init();
 			case Job::READ_HASH:   return _execute_read_hash();
@@ -417,6 +542,43 @@ class Trust_anchor
 
 		Io_response_handler _io_response_handler { _io_handler };
 
+		void _close_handle(Vfs::Vfs_handle **handle)
+		{
+			(*handle)->close();
+			(*handle) = nullptr;
+		}
+
+		struct Jitterentropy_io_job_buffer : Util::Io_job::Buffer
+		{
+			char buffer[32] { };
+
+			Jitterentropy_io_job_buffer()
+			{
+				Buffer::base = buffer;
+				Buffer::size = sizeof (buffer);
+			}
+		};
+
+		Vfs::Vfs_handle *_jitterentropy_handle  { nullptr };
+		Genode::Constructible<Util::Io_job> _jitterentropy_io_job { };
+		Jitterentropy_io_job_buffer _jitterentropy_io_job_buffer { };
+
+
+		struct Private_key_io_job_buffer : Util::Io_job::Buffer
+		{
+			char buffer[PRIVATE_KEY_SIZE] { };
+
+			Private_key_io_job_buffer()
+			{
+				Buffer::base = buffer;
+				Buffer::size = sizeof (buffer);
+			}
+		};
+
+		Vfs::Vfs_handle *_private_key_handle { nullptr };
+		Genode::Constructible<Util::Io_job> _private_key_io_job { };
+		Private_key_io_job_buffer _private_key_io_job_buffer { };
+
 		/* key */
 
 		Vfs::Vfs_handle *_key_handle  { nullptr };
@@ -424,7 +586,7 @@ class Trust_anchor
 
 		struct Key_io_job_buffer : Util::Io_job::Buffer
 		{
-			char buffer[64] { };
+			char buffer[Aes_256_key_wrap::CIPHERTEXT_SIZE] { };
 
 			Key_io_job_buffer()
 			{
@@ -433,7 +595,19 @@ class Trust_anchor
 			}
 		};
 
-		Key_io_job_buffer _key_io_job_buffer { };
+		struct Passphrase_hash_buffer : Util::Io_job::Buffer
+		{
+			char buffer[PASSPHRASE_HASH_SIZE] { };
+
+			Passphrase_hash_buffer()
+			{
+				Buffer::base = buffer;
+				Buffer::size = sizeof (buffer);
+			}
+		};
+
+		Key_io_job_buffer      _key_io_job_buffer      { };
+		Passphrase_hash_buffer _passphrase_hash_buffer { };
 
 		bool _check_key_file(Path const &path)
 		{
@@ -453,6 +627,64 @@ class Trust_anchor
 			}
 			_state = State::UNINITIALIZED;
 			return false;
+		}
+
+		bool _open_private_key_file_and_queue_read()
+		{
+			Path file_path = "/dev/jitterentropy";
+			using Result = Vfs::Directory_service::Open_result;
+
+			Result const res =
+				_vfs_env.root_dir().open(file_path.string(),
+				                         Vfs::Directory_service::OPEN_MODE_RDONLY,
+				                         (Vfs::Vfs_handle **)&_private_key_handle,
+				                         _vfs_env.alloc());
+			if (res != Result::OPEN_OK) {
+				Genode::error("could not open '", file_path.string(), "'");
+				return false;
+			}
+
+			_private_key_handle->handler(&_io_response_handler);
+			_private_key_io_job.construct(*_private_key_handle, Util::Io_job::Operation::READ,
+			                      _private_key_io_job_buffer, 0,
+			                      Util::Io_job::Partial_result::ALLOW);
+
+			if (_private_key_io_job->execute() && _private_key_io_job->completed()) {
+				_close_handle(&_private_key_handle);
+				_private_key_io_job_buffer.size = _private_key_io_job->current_offset();
+				_private_key_io_job.destruct();
+				return true;
+			}
+			return true;
+		}
+
+		bool _open_jitterentropy_file_and_queue_read()
+		{
+			Path file_path = "/dev/jitterentropy";
+			using Result = Vfs::Directory_service::Open_result;
+
+			Result const res =
+				_vfs_env.root_dir().open(file_path.string(),
+				                         Vfs::Directory_service::OPEN_MODE_RDONLY,
+				                         (Vfs::Vfs_handle **)&_jitterentropy_handle,
+				                         _vfs_env.alloc());
+			if (res != Result::OPEN_OK) {
+				Genode::error("could not open '", file_path.string(), "'");
+				return false;
+			}
+
+			_jitterentropy_handle->handler(&_io_response_handler);
+			_jitterentropy_io_job.construct(*_jitterentropy_handle, Util::Io_job::Operation::READ,
+			                      _jitterentropy_io_job_buffer, 0,
+			                      Util::Io_job::Partial_result::ALLOW);
+
+			if (_jitterentropy_io_job->execute() && _jitterentropy_io_job->completed()) {
+				_close_handle(&_jitterentropy_handle);
+				_jitterentropy_io_job_buffer.size = _jitterentropy_io_job->current_offset();
+				_jitterentropy_io_job.destruct();
+				return true;
+			}
+			return true;
 		}
 
 		bool _open_key_file_and_queue_read(Path const &path)
@@ -478,11 +710,48 @@ class Trust_anchor
 			                      Util::Io_job::Partial_result::ALLOW);
 			if (_key_io_job->execute() && _key_io_job->completed()) {
 				_state = State::INITIALIZED;
-				_vfs_env.root_dir().close(_key_handle);
-				_key_handle = nullptr;
+				_close_handle(&_key_handle);
 				return true;
 			}
 			return true;
+		}
+
+		bool _read_private_key_file_finished()
+		{
+			if (!_private_key_io_job.constructed()) {
+				return true;
+			}
+
+			// XXX trigger sync
+
+			bool const progress  = _private_key_io_job->execute();
+			bool const completed = _private_key_io_job->completed();
+			if (completed) {
+				_close_handle(&_private_key_handle);
+				_private_key_io_job_buffer.size = _private_key_io_job->current_offset();
+				_private_key_io_job.destruct();
+			}
+
+			return progress && completed;
+		}
+
+		bool _read_jitterentropy_file_finished()
+		{
+			if (!_jitterentropy_io_job.constructed()) {
+				return true;
+			}
+
+			// XXX trigger sync
+
+			bool const progress  = _jitterentropy_io_job->execute();
+			bool const completed = _jitterentropy_io_job->completed();
+			if (completed) {
+				_close_handle(&_jitterentropy_handle);
+				_jitterentropy_io_job_buffer.size = _jitterentropy_io_job->current_offset();
+				_jitterentropy_io_job.destruct();
+			}
+
+			return progress && completed;
 		}
 
 		bool _read_key_file_finished()
@@ -497,8 +766,8 @@ class Trust_anchor
 			bool const completed = _key_io_job->completed();
 			if (completed) {
 				_state = State::INITIALIZED;
-				_vfs_env.root_dir().close(_key_handle);
-				_key_handle = nullptr;
+				_close_handle(&_key_handle);
+				_key_io_job_buffer.size = _key_io_job->current_offset();
 				_key_io_job.destruct();
 			}
 
@@ -527,33 +796,9 @@ class Trust_anchor
 			_key_io_job.construct(*_key_handle, Util::Io_job::Operation::WRITE,
 			                      _key_io_job_buffer, 0);
 			if (_key_io_job->execute() && _key_io_job->completed()) {
-				_state = State::INITIALIZED;
-				_vfs_env.root_dir().close(_key_handle);
-				_key_handle = nullptr;
-				_key_io_job.destruct();
-				return true;
+				_start_sync_at_key_io_job();
 			}
 			return true;
-		}
-
-		bool _write_key_file_finished()
-		{
-			if (!_key_io_job.constructed()) {
-				return true;
-			}
-
-			// XXX trigger sync
-
-			bool const progress  = _key_io_job->execute();
-			bool const completed = _key_io_job->completed();
-			if (completed) {
-				_state = State::INITIALIZED;
-				_vfs_env.root_dir().close(_key_handle);
-				_key_handle = nullptr;
-				_key_io_job.destruct();
-			}
-
-			return progress && completed;
 		}
 
 
@@ -597,8 +842,7 @@ class Trust_anchor
 			                       _hash_io_job_buffer, 0,
 			                       Util::Io_job::Partial_result::ALLOW);
 			if (_hash_io_job->execute() && _hash_io_job->completed()) {
-				_vfs_env.root_dir().close(_hash_handle);
-				_hash_handle = nullptr;
+				_close_handle(&_hash_handle);
 				_hash_io_job.destruct();
 				return true;
 			}
@@ -610,26 +854,26 @@ class Trust_anchor
 			if (!_hash_io_job.constructed()) {
 				return true;
 			}
-
-			// XXX trigger sync
-
 			bool const progress  = _hash_io_job->execute();
 			bool const completed = _hash_io_job->completed();
 			if (completed) {
-				_vfs_env.root_dir().close(_hash_handle);
-				_hash_handle = nullptr;
+				_close_handle(&_hash_handle);
 				_hash_io_job.destruct();
 			}
 
 			return progress && completed;
 		}
 
-		void _close_hash_handle()
+		void _start_sync_at_hash_io_job()
 		{
-			_vfs_env.root_dir().close(_hash_handle);
-			Genode::destroy(_hash_handle->alloc(), _hash_handle);
-			_hash_handle = nullptr;
-			_hash_io_job.destruct();
+			_hash_io_job.construct(*_hash_handle, Util::Io_job::Operation::SYNC,
+			                       _hash_io_job_buffer, 0);
+		}
+
+		void _start_sync_at_key_io_job()
+		{
+			_key_io_job.construct(*_key_handle, Util::Io_job::Operation::SYNC,
+			                      _key_io_job_buffer, 0);
 		}
 
 		bool _open_hash_file_and_write(Path const &path)
@@ -665,25 +909,63 @@ class Trust_anchor
 			                      _hash_io_job_buffer, 0);
 
 			if (_hash_io_job->execute() && _hash_io_job->completed()) {
-				_close_hash_handle();
+				_start_sync_at_hash_io_job();
 			}
 			return true;
 		}
 
-		bool _write_hash_file_finished()
+		bool _write_op_on_hash_file_is_in_final_sync_step()
+		{
+			if (_hash_io_job->op() == Util::Io_job::Operation::SYNC) {
+				return true;
+			}
+			bool const progress  = _hash_io_job->execute();
+			bool const completed = _hash_io_job->completed();
+			if (completed) {
+				_start_sync_at_hash_io_job();
+			}
+			return progress && completed;
+		}
+
+		bool _final_sync_of_write_op_on_hash_file_finished()
 		{
 			if (!_hash_io_job.constructed()) {
 				return true;
 			}
-
-			// XXX trigger sync
-
 			bool const progress  = _hash_io_job->execute();
 			bool const completed = _hash_io_job->completed();
 			if (completed) {
-				_close_hash_handle();
+				_close_handle(&_hash_handle);
+				_hash_io_job.destruct();
 			}
+			return progress && completed;
+		}
 
+		bool _write_op_on_key_file_is_in_final_sync_step()
+		{
+			if (_key_io_job->op() == Util::Io_job::Operation::SYNC) {
+				return true;
+			}
+			bool const progress  = _key_io_job->execute();
+			bool const completed = _key_io_job->completed();
+			if (completed) {
+				_start_sync_at_key_io_job();
+			}
+			return progress && completed;
+		}
+
+		bool _final_sync_of_write_op_on_key_file_finished()
+		{
+			if (!_key_io_job.constructed()) {
+				return true;
+			}
+			bool const progress  = _key_io_job->execute();
+			bool const completed = _key_io_job->completed();
+			if (completed) {
+				_state = State::INITIALIZED;
+				_close_handle(&_key_handle);
+				_key_io_job.destruct();
+			}
 			return progress && completed;
 		}
 
@@ -706,7 +988,9 @@ class Trust_anchor
 				}
 			}
 			else {
-				Genode::log("No key file found, TA not initialized");
+				if (VERBOSE) {
+					Genode::log("No key file found, TA not initialized");
+				}
 			}
 		}
 
@@ -729,18 +1013,13 @@ class Trust_anchor
 			if (_state != State::UNINITIALIZED) {
 				return false;
 			}
+			SHA256((unsigned char const *)src, len,
+			       (unsigned char *)_passphrase_hash_buffer.base);
 
-			if (len > _key_io_job_buffer.size) {
-				len = _key_io_job_buffer.size;
-			}
-
-			_key_io_job_buffer.size = len;
-
-			Genode::memcpy(_key_io_job_buffer.buffer, src,
-			               _key_io_job_buffer.size);
+			_passphrase_hash_buffer.size = SHA256_DIGEST_LENGTH;
 
 			_job       = Job::INIT;
-			_job_state = Job_state::PENDING;
+			_job_state = Job_state::INIT_READ_JITTERENTROPY_PENDING;
 			return true;
 		}
 
@@ -774,14 +1053,10 @@ class Trust_anchor
 				return true;
 			}
 
-			if (len > _key_io_job_buffer.size) {
-				len = _key_io_job_buffer.size;
-			}
+			SHA256((unsigned char const *)src, len,
+			       (unsigned char *)_passphrase_hash_buffer.base);
 
-			_key_io_job_buffer.size = len;
-
-			Genode::memcpy(_key_io_job_buffer.buffer, src,
-			               _key_io_job_buffer.size);
+			_passphrase_hash_buffer.size = SHA256_DIGEST_LENGTH;
 
 			_job       = Job::UNLOCK;
 			_job_state = Job_state::PENDING;

@@ -45,6 +45,8 @@ define HELP_MESSAGE
     KEEP_BUILD_DIR=1   Do not remove build directories of built binary
                        packages. This is useful for debugging build
                        problems.
+
+    CCACHE=1           Compiler calls will use the C/C++ compiler cache.
 endef
 
 export GENODE_DIR := $(realpath $(dir $(MAKEFILE_LIST))/../..)
@@ -123,7 +125,7 @@ $(BUILD_MK_FILE): checked_source_archives_exist checked_no_uncategorized
 	             echo -e "\nall: \$$(TARGETS)"; \
 	             echo -e "\n\$$(TARGETS):"; \
 	             echo -e "\t\$$(MAKE) -f \$$(TOOL_DIR)/depot/mk/\$${TOOL(\$$@)}" \
-	                     "\$${ARGS(\$$@)} VERBOSE=\$$(VERBOSE)\n"; \
+	                     "\$${ARGS(\$$@)} CCACHE=\$$(CCACHE) VERBOSE=\$$(VERBOSE)\n"; \
 	          ) > $@
 
 

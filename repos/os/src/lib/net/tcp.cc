@@ -32,7 +32,7 @@ void Net::Tcp_packet::print(Genode::Output &output) const
 	if (ack()) { Genode::print(output, "a"); }
 	if (urg()) { Genode::print(output, "u"); }
 	if (ece()) { Genode::print(output, "e"); }
-	if (crw()) { Genode::print(output, "c"); }
+	if (cwr()) { Genode::print(output, "c"); }
 	if (ns())  { Genode::print(output, "n"); }
 	Genode::print(output, "' ");
 }
@@ -43,7 +43,7 @@ void Net::Tcp_packet::update_checksum(Ipv4_address ip_src,
                                       size_t       tcp_size)
 {
 	_checksum = 0;
-	_checksum = internet_checksum_pseudo_ip((uint16_t*)this, tcp_size,
+	_checksum = internet_checksum_pseudo_ip((Packed_uint16 *)this, tcp_size,
 	                                        host_to_big_endian((uint16_t)tcp_size),
 	                                        Ipv4_packet::Protocol::TCP, ip_src, ip_dst);
 }

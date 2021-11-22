@@ -5,7 +5,7 @@
  */
 
 /*
- * Copyright (C) 2014-2017 Genode Labs GmbH
+ * Copyright (C) 2014-2021 Genode Labs GmbH
  *
  * This file is distributed under the terms of the GNU General Public License
  * version 2.
@@ -19,14 +19,15 @@
 #include <util/list.h>
 
 #include <lx_emul.h>
-#include <lx_emul/extern_c_begin.h>
+#include <legacy/lx_emul/extern_c_begin.h>
 #include <linux/usb.h>
+#include <linux/usb/hcd.h>
 #include "raw.h"
-#include <lx_emul/extern_c_end.h>
+#include <legacy/lx_emul/extern_c_end.h>
 #include <signal.h>
 
-#include <lx_kit/malloc.h>
-#include <lx_kit/scheduler.h>
+#include <legacy/lx_kit/malloc.h>
+#include <legacy/lx_kit/scheduler.h>
 
 using namespace Genode;
 
@@ -38,117 +39,74 @@ constexpr bool verbose_raw = false;
 namespace Usb {
 	class  Session_component;
 	class  Root;
-	class  Worker;
 	class  Cleaner;
 }
 
 /**
  * Keep track of all registered USB devices (via raw driver)
  */
-struct Device : List<Device>::Element
+class Device : public List<Device>::Element
 {
-	usb_device *udev;
+	using Tx = Usb::Session_rpc_object::Tx;
+	using Packet_descriptor = Usb::Packet_descriptor;
 
-	static List<Device> *list()
-	{
-		static List<Device> _l;
-		return &_l;
-	}
-
-	static Device * device_product(uint16_t vendor, uint16_t product)
-	{
-		for (Device *d = list()->first(); d; d = d->next()) {
-			if (d->udev->descriptor.idVendor == vendor && d->udev->descriptor.idProduct == product)
-				return d;
-		}
-
-		return nullptr;
-	}
-
-
-	static Device * device_bus(long bus, long dev)
-	{
-		for (Device *d = list()->first(); d; d = d->next()) {
-			if (d->udev->bus->busnum == bus && d->udev->devnum == dev)
-				return d;
-		}
-
-		return nullptr;
-	}
-
-	static Device * device_class(long class_, Session_label label)
-	{
-		for (Device *d = list()->first(); d; d = d->next()) {
-			long c = d->interface(0)->cur_altsetting->desc.bInterfaceClass;
-			if (class_ ==  c && label == d->label())
-				return d;
-		}
-
-		return nullptr;
-	}
-
-	static void report_device_list();
-
-	Device(usb_device *udev) : udev(udev)
-	{
-		list()->insert(this);
-		report_device_list();
-	}
-
-	~Device()
-	{
-		list()->remove(this);
-		report_device_list();
-	}
-
-	usb_interface *interface(unsigned index)
-	{
-		if (!udev || !udev->actconfig)
-			return nullptr;
-
-		if (index >= udev->actconfig->desc.bNumInterfaces)
-			return nullptr;
-
-		usb_interface *iface = udev->actconfig->interface[index];
-		return iface;
-	}
-
-	usb_host_endpoint *endpoint(usb_interface *iface, unsigned alt_setting,
-	                            unsigned endpoint_num)
-	{
-		return &iface->altsetting[alt_setting].endpoint[endpoint_num];
-	}
-
-	Session_label label()
-	{
-		if (!udev || !udev->bus)
-			return Session_label("usb-unknown");
-		return Session_label("usb-", udev->bus->busnum, "-", udev->devnum);
-	}
-};
-
-
-/**
- * Handle packet stream request, this way the entrypoint always returns to it's
- * server loop
- */
-class Usb::Worker : public Genode::Weak_object<Usb::Worker>
-{
 	private:
 
-		completion _packet_avail;
+		usb_device &_udev;
+		Lx::Task    _task { _run, this, "device_worker",
+		                    Lx::Task::PRIORITY_2,
+		                    Lx::scheduler() };
+		completion  _packet_avail;
+		Tx::Sink   *_sink { nullptr };
 
-		Session::Tx::Sink        *_sink;
-		Device                   *_device      = nullptr;
 		Signal_context_capability _sigh_ready;
-		Lx::Task                 *_task        = nullptr;
-		unsigned                  _p_in_flight = 0;
-		bool                      _device_ready = false;
+		unsigned                  _p_in_flight  { 0 };
 
-		void _ack_packet(Packet_descriptor &p)
+		template<typename FN>
+		void _with_packet_stream(FN const &fn)
 		{
-			_sink->acknowledge_packet(p);
-			_p_in_flight--;
+			if (_sink == nullptr) return;
+			fn(*_sink);
+		}
+
+		template <typename FN>
+		void _with_interface(unsigned index, FN const &fn)
+		{
+			if (!_udev.actconfig)
+				return;
+
+			if (index >= _udev.actconfig->desc.bNumInterfaces)
+				return;
+
+			usb_interface * const interface_ptr = _udev.actconfig->interface[index];
+
+			if (!interface_ptr)
+				return;
+
+			fn(*interface_ptr);
+		}
+
+		template <typename FN>
+		void _for_each_interface(FN const &fn)
+		{
+			if (!_udev.actconfig)
+				return;
+
+			for (unsigned i = 0; i < _udev.actconfig->desc.bNumInterfaces; i++)
+				_with_interface(i, fn);
+		}
+
+		void _ack_packet(Packet_descriptor p)
+		{
+			_with_packet_stream([&](Tx::Sink &sink) {
+				sink.acknowledge_packet(p);
+				_p_in_flight--;
+			});
+		}
+
+		usb_host_endpoint *_host_ep(uint8_t ep)
+		{
+			return ep & USB_DIR_IN ? _udev.ep_in[ep & 0xf] : _udev.ep_out[ep & 0xf];
 		}
 
 		/**
@@ -159,7 +117,7 @@ class Usb::Worker : public Genode::Weak_object<Usb::Worker>
 			char *buffer = _sink->packet_content(p);
 			int   length;
 
-			if ((length = usb_string(_device->udev, p.string.index, buffer, p.size())) < 0) {
+			if ((length = usb_string(&_udev, p.string.index, buffer, p.size())) < 0) {
 				warning("Could not read string descriptor index: ", (unsigned)p.string.index);
 				p.string.length = 0;
 			} else {
@@ -176,19 +134,40 @@ class Usb::Worker : public Genode::Weak_object<Usb::Worker>
 		{
 			void *buf = kmalloc(4096, GFP_NOIO);
 
-			int err = usb_control_msg(_device->udev, usb_rcvctrlpipe(_device->udev, 0),
+			int err = usb_control_msg(&_udev, usb_rcvctrlpipe(&_udev, 0),
 			                          p.control.request, p.control.request_type,
 			                          p.control.value, p.control.index, buf,
 			                          p.size(), p.control.timeout);
 
-			if (err > 0 && p.size())
-				Genode::memcpy(_sink->packet_content(p), buf, err);
+			if (err > 0 && p.size()) {
+				_with_packet_stream([&](Tx::Sink &sink) {
+					Genode::memcpy(sink.packet_content(p), buf, err);
+				});
+			}
 
 			kfree(buf);
 
-			p.control.actual_size = err;
+			if (err >= 0) {
+				p.succeded = true;
+				p.control.actual_size = err;
+			} else {
+				p.control.actual_size = 0;
 
-			p.succeded = (err < 0 && err != -EPIPE) ? false : true;
+				if (err == -ENOENT)
+					p.error = Packet_descriptor::INTERFACE_OR_ENDPOINT_ERROR;
+				else if ((err == -ENODEV) || (err == -ESHUTDOWN))
+					p.error = Packet_descriptor::NO_DEVICE_ERROR;
+				else if ((err == -EPROTO) || (err == -EILSEQ))
+					p.error = Packet_descriptor::PROTOCOL_ERROR;
+				else if (err == -EPIPE)
+					p.error = Packet_descriptor::STALL_ERROR;
+				else if (err == -ETIMEDOUT)
+					p.error = Packet_descriptor::TIMEOUT_ERROR;
+				else {
+					Genode::error(__func__, ": unhandled error: ", err);
+					p.error = Packet_descriptor::UNKNOWN_ERROR;
+				}
+			}
 		}
 
 		/**
@@ -201,20 +180,38 @@ class Usb::Worker : public Genode::Weak_object<Usb::Worker>
 			if (p.size())
 				Genode::memcpy(buf, _sink->packet_content(p), p.size());
 
-			int err = usb_control_msg(_device->udev, usb_sndctrlpipe(_device->udev, 0),
+			int err = usb_control_msg(&_udev, usb_sndctrlpipe(&_udev, 0),
 			                          p.control.request, p.control.request_type,
 			                          p.control.value, p.control.index, buf, p.size(),
 			                          p.control.timeout);
-			if (err >= 0 || err== -EPIPE) {
-				p.control.actual_size = err;
+
+			if (err >= 0) {
 				p.succeded = true;
+				p.control.actual_size = err;
+
+				if (p.control.request == USB_REQ_CLEAR_FEATURE &&
+				    p.control.value == USB_ENDPOINT_HALT) {
+					usb_reset_endpoint(&_udev, p.control.index);
+				}
+			} else {
+				p.control.actual_size = 0;
+
+				if (err == -ENOENT)
+					p.error = Packet_descriptor::INTERFACE_OR_ENDPOINT_ERROR;
+				else if ((err == -ENODEV) || (err == -ESHUTDOWN))
+					p.error = Packet_descriptor::NO_DEVICE_ERROR;
+				else if ((err == -EPROTO) || (err == -EILSEQ))
+					p.error = Packet_descriptor::PROTOCOL_ERROR;
+				else if (err == -EPIPE)
+					p.error = Packet_descriptor::STALL_ERROR;
+				else if (err == -ETIMEDOUT)
+					p.error = Packet_descriptor::TIMEOUT_ERROR;
+				else {
+					Genode::error(__func__, ": unhandled error: ", err);
+					p.error = Packet_descriptor::UNKNOWN_ERROR;
+				}
 			}
 
-			if (err >= 0
-			    && p.control.request == USB_REQ_CLEAR_FEATURE
-			    && p.control.value == USB_ENDPOINT_HALT) {
-				usb_reset_endpoint(_device->udev, p.control.index);
-			}
 			kfree(buf);
 		}
 
@@ -223,24 +220,23 @@ class Usb::Worker : public Genode::Weak_object<Usb::Worker>
 		 */
 		struct Complete_data
 		{
-			Weak_ptr<Worker>   worker;
+			Device            *device;
 			Packet_descriptor  packet;
 
-			Complete_data(Weak_ptr<Worker> &w, Packet_descriptor &p)
-			: worker(w), packet(p) { }
+			Complete_data(Device *device, Packet_descriptor &p)
+			: device(device), packet(p) { }
 		};
 
 		Complete_data * alloc_complete_data(Packet_descriptor &p)
 		{
 			void * data = kmalloc(sizeof(Complete_data), GFP_KERNEL);
-			construct_at<Complete_data>(data, this->weak_ptr(), p);
+			construct_at<Complete_data>(data, this, p);
 			return reinterpret_cast<Complete_data *>(data);
 		}
 
 		static void free_complete_data(Complete_data *data)
 		{
 			data->packet.~Packet_descriptor();
-			data->worker.~Weak_ptr<Worker>();
 			kfree (data);
 		}
 
@@ -250,13 +246,31 @@ class Usb::Worker : public Genode::Weak_object<Usb::Worker>
 				p.transfer.actual_size = urb->actual_length;
 				p.succeded             = true;
 
-				if (read)
-					Genode::memcpy(_sink->packet_content(p), urb->transfer_buffer, 
-					               urb->actual_length);
-			}
+				if (read) {
+					/* make sure the client sees the actual amount of data */
+					for (int i = 0; i < urb->number_of_packets; i++) {
+						p.transfer.actual_packet_size[i] = urb->iso_frame_desc[i].actual_length;
+					}
 
-			if (urb->status == -EPIPE) {
+					/*
+					 * We have to copy the whole transfer buffer because the
+					 * controller used the offsets into the original buffer to
+					 * store the data.
+					 */
+					_with_packet_stream([&](Tx::Sink &sink) {
+						Genode::memcpy(sink.packet_content(p), urb->transfer_buffer,
+						               urb->transfer_buffer_length);
+					});
+				}
+			} else if (urb->status == -ESHUTDOWN) {
+				p.error = Packet_descriptor::NO_DEVICE_ERROR;
+			} else if ((urb->status == -EPROTO) || (urb->status == -EILSEQ)) {
+				p.error = Packet_descriptor::PROTOCOL_ERROR;
+			} else if (urb->status == -EPIPE) {
 				p.error = Packet_descriptor::STALL_ERROR;
+			} else {
+				Genode::error(__func__, ": unhandled error: ", urb->status);
+				p.error = Packet_descriptor::UNKNOWN_ERROR;
 			}
 
 			_ack_packet(p);
@@ -266,13 +280,8 @@ class Usb::Worker : public Genode::Weak_object<Usb::Worker>
 		{
 			Complete_data *data = (Complete_data *)urb->context;
 
-			{
-				Locked_ptr<Worker> worker(data->worker);
-
-				if (worker.valid())
-					worker->_async_finish(data->packet, urb,
-					                      !!(data->packet.transfer.ep & USB_DIR_IN));
-			}
+			data->device->_async_finish(data->packet, urb,
+			                            !!(data->packet.transfer.ep & USB_DIR_IN));
 
 			free_complete_data(data);
 			dma_free(urb->transfer_buffer);
@@ -288,9 +297,9 @@ class Usb::Worker : public Genode::Weak_object<Usb::Worker>
 			void    *buf = dma_malloc(p.size());
 
 			if (read)
-				pipe = usb_rcvbulkpipe(_device->udev, p.transfer.ep);
+				pipe = usb_rcvbulkpipe(&_udev, p.transfer.ep);
 			else {
-				pipe = usb_sndbulkpipe(_device->udev, p.transfer.ep);
+				pipe = usb_sndbulkpipe(&_udev, p.transfer.ep);
 				Genode::memcpy(buf, _sink->packet_content(p), p.size());
 			}
 
@@ -298,19 +307,25 @@ class Usb::Worker : public Genode::Weak_object<Usb::Worker>
 			if (!bulk_urb) {
 				error("Failed to allocate bulk URB");
 				dma_free(buf);
-				p.error = Usb::Packet_descriptor::SUBMIT_ERROR;
+				p.error = Packet_descriptor::MEMORY_ERROR;
 				return false;
 			}
 
 			Complete_data *data = alloc_complete_data(p);
 
-			usb_fill_bulk_urb(bulk_urb, _device->udev, pipe, buf, p.size(),
+			usb_fill_bulk_urb(bulk_urb, &_udev, pipe, buf, p.size(),
 			                 _async_complete, data);
 
 			int ret = usb_submit_urb(bulk_urb, GFP_KERNEL);
 			if (ret != 0) {
-				error("Failed to submit URB, error: ", ret);
-				p.error = Usb::Packet_descriptor::SUBMIT_ERROR;
+				if (ret == -ENOENT)
+					p.error = Packet_descriptor::INTERFACE_OR_ENDPOINT_ERROR;
+				else if ((ret == -ENODEV) || (ret == -ESHUTDOWN))
+					p.error = Packet_descriptor::NO_DEVICE_ERROR;
+				else {
+					Genode::error(__func__, ": unhandled error: ", ret);
+					p.error = Packet_descriptor::UNKNOWN_ERROR;
+				}
 
 				free_complete_data(data);
 				usb_free_urb(bulk_urb);
@@ -330,9 +345,9 @@ class Usb::Worker : public Genode::Weak_object<Usb::Worker>
 			void    *buf = dma_malloc(p.size());
 
 			if (read)
-				pipe = usb_rcvintpipe(_device->udev, p.transfer.ep);
+				pipe = usb_rcvintpipe(&_udev, p.transfer.ep);
 			else {
-				pipe = usb_sndintpipe(_device->udev, p.transfer.ep);
+				pipe = usb_sndintpipe(&_udev, p.transfer.ep);
 				Genode::memcpy(buf, _sink->packet_content(p), p.size());
 			}
 
@@ -340,7 +355,7 @@ class Usb::Worker : public Genode::Weak_object<Usb::Worker>
 			if (!irq_urb) {
 				error("Failed to allocate interrupt URB");
 				dma_free(buf);
-				p.error = Usb::Packet_descriptor::SUBMIT_ERROR;
+				p.error = Usb::Packet_descriptor::MEMORY_ERROR;
 				return false;
 			}
 
@@ -350,20 +365,45 @@ class Usb::Worker : public Genode::Weak_object<Usb::Worker>
 
 			if (p.transfer.polling_interval == Usb::Packet_descriptor::DEFAULT_POLLING_INTERVAL) {
 
-				usb_host_endpoint *ep = read ? _device->udev->ep_in[p.transfer.ep & 0x0f]
-				                             : _device->udev->ep_out[p.transfer.ep & 0x0f];
+				usb_host_endpoint *ep = _host_ep(p.transfer.ep);
+
+				if (!ep) {
+					error("could not get ep: ", p.transfer.ep);
+					dma_free(buf);
+					p.error = Usb::Packet_descriptor::INTERFACE_OR_ENDPOINT_ERROR;
+					return false;
+				}
+
 				polling_interval = ep->desc.bInterval;
 
 			} else
 				polling_interval = p.transfer.polling_interval;
 
-			usb_fill_int_urb(irq_urb, _device->udev, pipe, buf, p.size(),
+			usb_fill_int_urb(irq_urb, &_udev, pipe, buf, p.size(),
 			                 _async_complete, data, polling_interval);
 
 			int ret = usb_submit_urb(irq_urb, GFP_KERNEL);
 			if (ret != 0) {
-				error("Failed to submit URB, error: ", ret);
-				p.error = Usb::Packet_descriptor::SUBMIT_ERROR;
+				if (ret == -ENOENT)
+					p.error = Packet_descriptor::INTERFACE_OR_ENDPOINT_ERROR;
+				else if ((ret == -ENODEV) || (ret == -ESHUTDOWN))
+					p.error = Packet_descriptor::NO_DEVICE_ERROR;
+				else if (ret == -ENOSPC) {
+					/*
+					 * ENOSPC (no bandwidth) is handled by the USB HID driver
+					 * as return value of submitting an interrupt URB. But
+					 * since the USB session delivers the error asynchronously,
+					 * the error shows up at the HID driver as late as when
+					 * handling the interrupt where this error is not
+					 * anticipated.
+					 */
+					Genode::warning(__func__, ": reflect ENOSPC as STALL_ERROR");
+					p.error = Packet_descriptor::STALL_ERROR;
+				}
+				else {
+					Genode::error(__func__, ": unhandled error: ", ret);
+					p.error = Packet_descriptor::UNKNOWN_ERROR;
+				}
 
 				free_complete_data(data);
 				usb_free_urb(irq_urb);
@@ -380,29 +420,34 @@ class Usb::Worker : public Genode::Weak_object<Usb::Worker>
 		bool _isoc(Packet_descriptor &p, bool read)
 		{
 			unsigned           pipe;
-			usb_host_endpoint *ep;
+			usb_host_endpoint *ep  = _host_ep(p.transfer.ep);
 			void              *buf = dma_malloc(p.size());
 
 			if (read) {
-				pipe = usb_rcvisocpipe(_device->udev, p.transfer.ep);
-				ep   = _device->udev->ep_in[p.transfer.ep & 0x0f];
+				pipe = usb_rcvisocpipe(&_udev, p.transfer.ep);
 			}
 			else {
-				pipe = usb_sndisocpipe(_device->udev, p.transfer.ep);
-				ep   = _device->udev->ep_out[p.transfer.ep & 0x0f];
+				pipe = usb_sndisocpipe(&_udev, p.transfer.ep);
 				Genode::memcpy(buf, _sink->packet_content(p), p.size());
+			}
+
+			if (!ep) {
+				error("could not get ep: ", p.transfer.ep);
+				dma_free(buf);
+				p.error = Usb::Packet_descriptor::INTERFACE_OR_ENDPOINT_ERROR;
+				return false;
 			}
 
 			urb *urb = usb_alloc_urb(p.transfer.number_of_packets, GFP_KERNEL);
 			if (!urb) {
 				error("Failed to allocate isochronous URB");
 				dma_free(buf);
-				p.error = Usb::Packet_descriptor::SUBMIT_ERROR;
+				p.error = Usb::Packet_descriptor::MEMORY_ERROR;
 				return false;
 			}
 
 			Complete_data *data         = alloc_complete_data(p);
-			urb->dev                    = _device->udev;
+			urb->dev                    = &_udev;
 			urb->pipe                   = pipe;
 			urb->start_frame            = -1;
 			urb->stream_id              = 0;
@@ -425,8 +470,14 @@ class Usb::Worker : public Genode::Weak_object<Usb::Worker>
 			if (ret == 0)
 				return true;
 
-			error("Failed to submit URB, error: ", ret);
-			p.error = Usb::Packet_descriptor::SUBMIT_ERROR;
+			if (ret == -ENOENT)
+				p.error = Packet_descriptor::INTERFACE_OR_ENDPOINT_ERROR;
+			else if ((ret == -ENODEV) || (ret == -ESHUTDOWN))
+				p.error = Packet_descriptor::NO_DEVICE_ERROR;
+			else {
+				Genode::error(__func__, ": unhandled error: ", ret);
+				p.error = Packet_descriptor::UNKNOWN_ERROR;
+			}
 
 			free_complete_data(data);
 			usb_free_urb(urb);
@@ -439,10 +490,14 @@ class Usb::Worker : public Genode::Weak_object<Usb::Worker>
 		 */
 		void _alt_setting(Packet_descriptor &p)
 		{
-			int err = usb_set_interface(_device->udev, p.interface.number,
+
+			int err = usb_set_interface(&_udev, p.interface.number,
 			                            p.interface.alt_setting);
+
 			if (!err)
 				p.succeded = true;
+			else
+				Genode::error(__func__, ": unhandled error: ", err);
 		}
 
 		/**
@@ -450,7 +505,7 @@ class Usb::Worker : public Genode::Weak_object<Usb::Worker>
 		 */
 		void _config(Packet_descriptor &p)
 		{
-			usb_host_config *config = _device->udev->actconfig;
+			usb_host_config *config = _udev.actconfig;
 
 			if (config) {
 				for (unsigned i = 0; i < config->desc.bNumInterfaces; i++) {
@@ -461,10 +516,12 @@ class Usb::Worker : public Genode::Weak_object<Usb::Worker>
 				}
 			}
 
-			int err = usb_set_configuration(_device->udev, p.number);
+			int err = usb_set_configuration(&_udev, p.number);
 
 			if (!err)
 				p.succeded = true;
+			else
+				Genode::error(__func__, ": unhandled error: ", err);
 		}
 
 		/**
@@ -472,7 +529,7 @@ class Usb::Worker : public Genode::Weak_object<Usb::Worker>
 		 */
 		void _release_interface(Packet_descriptor &p)
 		{
-			usb_interface *iface = _device->interface(p.number);
+			usb_interface *iface = interface(p.number);
 
 			if (!iface)
 				return;
@@ -482,16 +539,32 @@ class Usb::Worker : public Genode::Weak_object<Usb::Worker>
 		}
 
 		/**
+		 * Flush all pending URBs for endpoint
+		 */
+		void _flush_endpoint(Packet_descriptor &p)
+		{
+			usb_host_endpoint *ep = _host_ep(p.number);
+
+			if (!ep) {
+				error("could net get ep: ", p.number);
+				p.error = Usb::Packet_descriptor::INTERFACE_OR_ENDPOINT_ERROR;
+				return;
+			}
+
+			usb_hcd_flush_endpoint(&_udev, ep);
+			p.succeded = true;
+		}
+
+		/**
 		 * Dispatch incoming packet types
 		 */
 		void _dispatch()
 		{
-			/*
-			 * Get packets until there are no more free ack slots or avaiable
-			 * packets
-			 */
-			while (_p_in_flight < _sink->ack_slots_free() && _sink->packet_avail())
-			{
+				/*
+				 * Get packets until there are no more free ack slots or avaiable
+				 * packets
+				 */
+			while (_sink && _p_in_flight < _sink->ack_slots_free() && _sink->packet_avail()) {
 				Packet_descriptor p = _sink->get_packet();
 
 				if (verbose_raw)
@@ -499,9 +572,8 @@ class Usb::Worker : public Genode::Weak_object<Usb::Worker>
 
 				_p_in_flight++;
 
-				if (!_device || !_device->udev ||
-				    _device->udev->state == USB_STATE_NOTATTACHED ||
-				    !_sink->packet_valid(p)) {
+				if (!_sink->packet_valid(p)) {
+					p.error = Packet_descriptor::PACKET_INVALID_ERROR;
 					_ack_packet(p);
 					continue;
 				}
@@ -545,22 +617,14 @@ class Usb::Worker : public Genode::Weak_object<Usb::Worker>
 					case Packet_descriptor::RELEASE_IF:
 						_release_interface(p);
 						break;
+
+					case Packet_descriptor::FLUSH_TRANSFERS:
+						_flush_endpoint(p);
+						break;
 				}
 
 				_ack_packet(p);
 			}
-		}
-
-		void _wait_for_device()
-		{
-			wait_queue_head_t wait;
-			_wait_event(wait, _device);
-			_wait_event(wait, _device->udev->actconfig);
-
-			if (_sigh_ready.valid())
-				Signal_transmitter(_sigh_ready).submit(1);
-
-			_device_ready = true;
 		}
 
 		/**
@@ -570,7 +634,13 @@ class Usb::Worker : public Genode::Weak_object<Usb::Worker>
 		{
 			/* wait for device to become ready */
 			init_completion(&_packet_avail);
-			_wait_for_device();
+			wait_queue_head_t wait;
+			_wait_event(wait, ready());
+
+			report_device_list();
+
+			if (_sigh_ready.valid())
+				Signal_transmitter(_sigh_ready).submit();
 
 			while (true) {
 				wait_for_completion(&_packet_avail);
@@ -578,53 +648,185 @@ class Usb::Worker : public Genode::Weak_object<Usb::Worker>
 			}
 		}
 
+		static void _run(void *data)
+		{
+			Device *device = static_cast<Device *>(data);
+			device->_wait();
+		}
+
 	public:
 
-		static void run(void *worker)
+		Device(usb_device &udev) : _udev(udev)
 		{
-			Worker *w = static_cast<Worker *>(worker);
-			w->_wait();
+			list()->insert(this);
+
+			if (!Lx::scheduler().active()) {
+				Lx::scheduler().schedule(); }
 		}
 
-		Worker(Session::Tx::Sink *sink)
-		: _sink(sink)
-		{ }
-
-		~Worker()
+		~Device()
 		{
-			Weak_object<Worker>::lock_for_destruction();
-		}
-
-		void start()
-		{
-			if (!_task) {
-				_task = new (Lx::Malloc::mem()) Lx::Task(run, this, "raw_worker",
-				                                              Lx::Task::PRIORITY_2,
-				                                              Lx::scheduler());
-				if (!Lx::scheduler().active()) {
-					Lx::scheduler().schedule();
-				}
-			}
-		}
-
-		void stop()
-		{
-			if (_task) {
-				Lx::scheduler().remove(_task);
-				destroy(Lx::Malloc::mem(), _task);
-				_task = nullptr;
-			}
+			Lx::scheduler().remove(&_task);
+			list()->remove(this);
+			report_device_list();
 		}
 
 		void packet_avail() { ::complete(&_packet_avail); }
 
-		void device(Device *device, Signal_context_capability sigh_ready = Signal_context_capability())
+		unsigned num_interfaces() const
 		{
-			_device       = device;
-			_sigh_ready   = sigh_ready;
+			if (ready())
+				return _udev.actconfig->desc.bNumInterfaces;
+
+			return 0;
 		}
 
-		bool device_ready() { return _device_ready; }
+		void packet_stream(Tx::Sink *sink)
+		{
+			_sink        = sink;
+			_p_in_flight = 0;
+
+			if (!_sink) {
+				_sigh_ready = Signal_context_capability { };
+			}
+		}
+
+		bool ready() const { return _udev.actconfig; }
+
+		void sigh_ready(Signal_context_capability sigh_ready)
+		{
+			_sigh_ready = sigh_ready;
+		}
+
+		static List<Device> *list()
+		{
+			static List<Device> _l;
+			return &_l;
+		}
+
+		static Device * device_by_product(uint16_t vendor, uint16_t product)
+		{
+			for (Device *d = list()->first(); d; d = d->next()) {
+				if (d->_udev.descriptor.idVendor == vendor && d->_udev.descriptor.idProduct == product)
+					return d;
+			}
+
+			return nullptr;
+		}
+
+		static Device * device_by_bus(long bus, long dev)
+		{
+			for (Device *d = list()->first(); d; d = d->next()) {
+				if (d->_udev.bus->busnum == bus && d->_udev.devnum == dev)
+					return d;
+			}
+
+			return nullptr;
+		}
+
+		static Device * device_by_class(long class_value, Session_label label)
+		{
+			for (Device *d = list()->first(); d; d = d->next()) {
+				if (class_value ==  d->device_class_value() && label == d->label())
+					return d;
+			}
+
+			return nullptr;
+		}
+
+		static void report_device_list();
+
+
+		usb_interface *interface(unsigned index)
+		{
+			if (!_udev.actconfig)
+				return nullptr;
+
+			if (index >= _udev.actconfig->desc.bNumInterfaces)
+				return nullptr;
+
+			usb_interface *iface = _udev.actconfig->interface[index];
+			return iface;
+		}
+
+
+		/**
+		 * Return pseudo device class of USB device
+		 *
+		 * The returned value expresses the type of USB device. If the device
+		 * has at least one HID interface, the value is USB_CLASS_HID. Otherwise,
+		 * the class of the first interface is interpreted at type the device.
+		 *
+		 * Note this classification of USB devices is meant as an interim solution
+		 * only to assist the implementation of access-control policies.
+		 */
+		unsigned device_class_value()
+		{
+			unsigned result = 0;
+
+			_with_interface(0, [&] (usb_interface &interface) {
+				if (interface.cur_altsetting)
+					result = interface.cur_altsetting->desc.bInterfaceClass; });
+
+			_for_each_interface([&] (usb_interface &interface) {
+				if (interface.cur_altsetting)
+					if (interface.cur_altsetting->desc.bInterfaceClass == USB_CLASS_HID)
+						result = USB_CLASS_HID; });
+
+			return result;
+		}
+
+		long bus()  const { return _udev.bus->busnum; }
+		long dev()  const { return _udev.devnum; }
+
+		usb_device &udev() const { return _udev; }
+
+		void report(Xml_generator &xml)
+		{
+			if (!_udev.actconfig)
+				return;
+
+			using namespace Genode;
+			using Value = String<64>;
+
+			xml.attribute("label",      label());
+			xml.attribute("vendor_id",  Value(Hex(_udev.descriptor.idVendor)));
+			xml.attribute("product_id", Value(Hex(_udev.descriptor.idProduct)));
+			xml.attribute("bus",        Value(Hex(_udev.bus->busnum)));
+			xml.attribute("dev",        Value(Hex(_udev.devnum)));
+			xml.attribute("class",      Value(Hex(device_class_value())));
+
+			_for_each_interface([&] (usb_interface &interface) {
+
+				if (!interface.cur_altsetting)
+					return;
+
+				xml.node("interface", [&] () {
+
+					uint8_t const class_value =
+						interface.cur_altsetting->desc.bInterfaceClass;
+
+					uint8_t const protocol_value =
+						interface.cur_altsetting->desc.bInterfaceProtocol;
+
+					xml.attribute("class", Value(Hex(class_value)));
+					xml.attribute("protocol", Value(Hex(protocol_value)));
+				});
+			});
+		}
+
+		usb_host_endpoint *endpoint(usb_interface *iface, unsigned alt_setting,
+		                            unsigned endpoint_num)
+		{
+			return &iface->altsetting[alt_setting].endpoint[endpoint_num];
+		}
+
+		Session_label label()
+		{
+			if (!_udev.bus)
+				return Session_label("usb-unknown");
+			return Session_label("usb-", _udev.bus->busnum, "-", _udev.devnum);
+		}
 };
 
 
@@ -668,7 +870,9 @@ class Usb::Cleaner : List<::Interface>
 			::Interface *interface = new(Lx::Malloc::mem()) ::Interface(iface);
 			insert(interface);
 			_task.unblock();
-			Lx::scheduler().schedule();
+
+			if (!Lx::scheduler().active())
+				Lx::scheduler().schedule();
 		}
 };
 
@@ -693,9 +897,19 @@ class Usb::Session_component : public Session_rpc_object,
 		Signal_context_capability          _sigh_state_change;
 		Io_signal_handler<Session_component> _packet_avail;
 		Io_signal_handler<Session_component> _ready_ack;
-		Worker                             _worker;
 		Ram_dataspace_capability           _tx_ds;
 		Usb::Cleaner                      &_cleaner;
+
+
+		void _drain_packet_stream()
+		{
+			while (sink()->packet_avail() && sink()->ready_to_ack()) {
+				Packet_descriptor p = sink()->get_packet();
+				p.succeded = false;
+				p.error    = Packet_descriptor::NO_DEVICE_ERROR;
+				sink()->acknowledge_packet(p);
+			}
+		}
 
 
 		void _signal_state_change()
@@ -706,8 +920,15 @@ class Usb::Session_component : public Session_rpc_object,
 
 		void _receive()
 		{
-			_worker.packet_avail();
-			Lx::scheduler().schedule();
+			if (!_device) {
+				_drain_packet_stream();
+				return;
+			}
+
+			_device->packet_avail();
+			if (!Lx::scheduler().active()) {
+				Lx::scheduler().schedule();
+			}
 		}
 
 	public:
@@ -729,17 +950,20 @@ class Usb::Session_component : public Session_rpc_object,
 		  _bus(bus), _dev(dev), _class(class_),
 		  _packet_avail(ep, *this, &Session_component::_receive),
 		  _ready_ack(ep, *this, &Session_component::_receive),
-		  _worker(sink()), _tx_ds(tx_ds), _cleaner(cleaner)
+		  _tx_ds(tx_ds), _cleaner(cleaner)
 		{
-			Device *device;
+			Device *device_ptr;
 			if (bus && dev) {
-				device = Device::device_bus(bus, dev);
+				device_ptr = Device::device_by_bus(bus, dev);
 			} else if (vendor && product) {
-				device = Device::device_product(_vendor, _product);
-			} else
-				device = Device::device_class(_class, _label);
-			if (device) {
-				state_change(DEVICE_ADD, device);
+				device_ptr = Device::device_by_product(_vendor, _product);
+			} else {
+				device_ptr = Device::device_by_class(_class, _label);
+			}
+
+			if (device_ptr) {
+				device_ptr->packet_stream(sink());
+				state_change(DEVICE_ADD, device_ptr);
 			}
 
 			/* register signal handlers */
@@ -749,13 +973,12 @@ class Usb::Session_component : public Session_rpc_object,
 		~Session_component()
 		{
 			/* release claimed interfaces */
-			if (_device && _device->udev && _device->udev->actconfig) {
-				unsigned const num = _device->udev->actconfig->desc.bNumInterfaces;
-				for (unsigned i = 0; i < num; i++)
+			if (_device && _device->ready())
+				for (unsigned i = 0; i < _device->num_interfaces() ; i++)
 					release_interface(i);
-			}
 
-			_worker.stop();
+			if (_device)
+				_device->packet_stream(nullptr);
 		}
 
 		/***********************
@@ -769,7 +992,7 @@ class Usb::Session_component : public Session_rpc_object,
 			if (!_device)
 				throw Device_not_found();
 
-			usb_interface *iface   = _device->interface(interface_num);
+			usb_interface *iface = _device->interface(interface_num);
 			if (!iface)
 				throw Interface_not_found();
 
@@ -795,15 +1018,15 @@ class Usb::Session_component : public Session_rpc_object,
 			if (!_device)
 				throw Device_not_found();
 
-			Genode::memcpy(device_descr, &_device->udev->descriptor, sizeof(usb_device_descriptor));
+			Genode::memcpy(device_descr, &_device->udev().descriptor, sizeof(usb_device_descriptor));
 
-			if (_device->udev->actconfig)
-				Genode::memcpy(config_descr, &_device->udev->actconfig->desc, sizeof(usb_config_descriptor));
+			if (_device->udev().actconfig)
+				Genode::memcpy(config_descr, &_device->udev().actconfig->desc, sizeof(usb_config_descriptor));
 			else
 				Genode::memset(config_descr, 0, sizeof(usb_config_descriptor));
 
-			device_descr->num   = _device->udev->devnum;
-			device_descr->speed = _device->udev->speed;
+			device_descr->num   = _device->udev().devnum;
+			device_descr->speed = _device->udev().speed;
 		}
 
 		unsigned alt_settings(unsigned index) override
@@ -863,10 +1086,10 @@ class Usb::Session_component : public Session_rpc_object,
 		                         unsigned              endpoint_num,
 		                         Endpoint_descriptor  *endpoint_descr) override
 		{
-			if (!_device || !_device->udev)
+			if (!_device)
 				throw Device_not_found();
 
-			usb_interface *iface = usb_ifnum_to_if(_device->udev, interface_num);
+			usb_interface *iface = usb_ifnum_to_if(&_device->udev(), interface_num);
 			if (!iface)
 				throw Interface_not_found();
 
@@ -880,14 +1103,14 @@ class Usb::Session_component : public Session_rpc_object,
 
 		bool session_device(Device *device)
 		{
-			usb_device_descriptor *descr = &device->udev->descriptor;
+			usb_device_descriptor *descr = &device->udev().descriptor;
 			usb_interface *iface = device->interface(0);
 
 			return (descr->idVendor == _vendor && descr->idProduct == _product)
-			       || (_bus && _dev && _bus == device->udev->bus->busnum &&
-			           _dev == device->udev->devnum)
+			       || (_bus && _dev && _bus == device->bus() &&
+			           _dev == device->dev())
 			       || (iface && iface->cur_altsetting &&
-			           _class == iface->cur_altsetting->desc.bInterfaceClass &&
+			           _class == device->device_class_value() &&
 			           _label == device->label())? true : false;
 		}
 
@@ -900,20 +1123,20 @@ class Usb::Session_component : public Session_rpc_object,
 
 					if (_device)
 						warning("Device type already present (vendor: ",
-						         Hex(device->udev->descriptor.idVendor),
-						         " product: ", Hex(device->udev->descriptor.idProduct),
+						         Hex(device->udev().descriptor.idVendor),
+						         " product: ", Hex(device->udev().descriptor.idProduct),
 						         ") Overwrite!");
 
 					_device = device;
-					_worker.device(_device, _sigh_state_change);
-					_worker.start();
+					_device->packet_stream(sink());
+					_device->sigh_ready(_sigh_state_change);
 					return true;
 
 				case DEVICE_REMOVE:
-					if (!session_device(device))
+					if (device != _device)
 						return false;
+
 					_device = nullptr;
-					_worker.stop();
 					_signal_state_change();
 					return true;
 			}
@@ -925,8 +1148,10 @@ class Usb::Session_component : public Session_rpc_object,
 		{
 			_sigh_state_change = sigh;
 
-			if (_worker.device_ready())
-				Signal_transmitter(_sigh_state_change).submit(1);
+			if (_device && _device->ready()) {
+				Signal_transmitter(_sigh_state_change).submit();
+			} else if (_device)
+				_device->sigh_ready(sigh);
 		}
 
 		Ram_dataspace_capability tx_ds() { return _tx_ds; }
@@ -1086,40 +1311,13 @@ void Device::report_device_list()
 	{
 
 		for (Device *d = list()->first(); d; d = d->next()) {
-			usb_interface *iface = d->interface(0);
 
-			if (!iface || !iface->cur_altsetting || !d->udev || !d->udev->bus) {
+			if (!d->udev().bus) {
 				Genode::warning("device ", d->label().string(), " state incomplete");
 				continue;
 			}
 
-			xml.node("device", [&] ()
-			{
-				char buf[16];
-
-				unsigned const bus = d->udev->bus->busnum;
-				unsigned const dev = d->udev->devnum;
-
-				xml.attribute("label", d->label().string());
-
-				Genode::snprintf(buf, sizeof(buf), "0x%4x",
-				                 d->udev->descriptor.idVendor);
-				xml.attribute("vendor_id", buf);
-
-				Genode::snprintf(buf, sizeof(buf), "0x%4x",
-				                 d->udev->descriptor.idProduct);
-				xml.attribute("product_id", buf);
-
-				Genode::snprintf(buf, sizeof(buf), "0x%4x", bus);
-				xml.attribute("bus", buf);
-
-				Genode::snprintf(buf, sizeof(buf), "0x%4x", dev);
-				xml.attribute("dev", buf);
-
-				Genode::snprintf(buf, sizeof(buf), "0x%02x",
-				                 iface->cur_altsetting->desc.bInterfaceClass);
-				xml.attribute("class", buf);
-			});
+			xml.node("device", [&] () { d->report(xml); });
 		}
 	});
 }
@@ -1137,20 +1335,18 @@ int raw_notify(struct notifier_block *nb, unsigned long action, void *data)
 		   " vendor: ",  Hex(udev->descriptor.idVendor),
 		   " product: ", Hex(udev->descriptor.idProduct));
 
-
 	switch (action) {
 
 		case USB_DEVICE_ADD:
 		{
 			::Session::list()->state_change(Usb::Session_component::DEVICE_ADD,
-			                                new (Lx::Malloc::mem()) Device(udev));
+			                                new (Lx::Malloc::mem()) Device(*udev));
 			break;
 		}
 
 		case USB_DEVICE_REMOVE:
 		{
-			Device *dev = Device::device_bus(udev->bus->busnum,
-			                                 udev->devnum);
+			Device *dev = Device::device_by_bus(udev->bus->busnum, udev->devnum);
 			if (dev) {
 				::Session::list()->state_change(Usb::Session_component::DEVICE_REMOVE, dev);
 				destroy(Lx::Malloc::mem(), dev);

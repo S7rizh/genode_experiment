@@ -20,17 +20,14 @@
 #include "pci_config_access.h"
 
 
-namespace Platform { namespace Pci {
-
-	struct Resource;
-} }
+namespace Platform { namespace Pci { struct Resource; } }
 
 
 class Platform::Pci::Resource
 {
 	public:
 
-		struct Bar : Genode::Register<32>
+		struct Bar : Register<32>
 		{
 			struct Space : Bitfield<0,1> { enum { MEM = 0, PORT = 1 }; };
 
@@ -61,7 +58,8 @@ class Platform::Pci::Resource
 
 	/* PORT or MEM32 resource */
 	Resource(uint32_t bar, uint32_t size)
-	: _bar{bar, 0}, _size(mem() ? Bar::mem_size(size, ~0) : Bar::port_size(size))
+	:
+		_bar{bar, 0}, _size(mem() ? Bar::mem_size(size, ~0) : Bar::port_size(size))
 	{ }
 
 	/* MEM64 resource */
@@ -84,9 +82,9 @@ class Platform::Pci::Resource
 		return Device::Resource((unsigned)_bar[0], (unsigned)_size);
 	}
 
-	void print(Genode::Output &out) const
+	void print(Output &out) const
 	{
-		Genode::print(out, Genode::Hex_range(base(), size()));
+		Genode::print(out, Hex_range(base(), size()));
 	}
 };
 
@@ -97,9 +95,7 @@ namespace Platform {
 	{
 		private:
 
-			uint8_t _bus = 0;
-			uint8_t _device = 0;
-			uint8_t _function = 0;     /* location at PCI bus */
+			Pci::Bdf _bdf;
 
 			/*
 			 * Information provided by the PCI config space
@@ -144,32 +140,55 @@ namespace Platform {
 				PCI_CMD_DMA    = 0x4,
 			};
 
+			struct Pci_header : Pci::Config
+			{
+				Pci_header(Config_access &access, Pci::Bdf const bdf)
+				: Pci::Config(access, bdf, 0 /* from start */) { }
+
+				struct Command : Register<0x04, 16>
+				{
+					struct Ioport : Bitfield< 0, 1> { };
+					struct Memory : Bitfield< 1, 1> { };
+					struct Dma    : Bitfield< 2, 1> { };
+				};
+			};
+
+			struct Device_bars {
+				Pci::Bdf bdf;
+				uint32_t bar_addr[Device::NUM_RESOURCES] { };
+
+				bool all_invalid() const {
+					for (unsigned i = 0; i < Device::NUM_RESOURCES; i++) {
+						if (bar_addr[i] != 0 && bar_addr[i] != ~0U)
+							return false;
+					}
+					return true;
+				}
+
+				Device_bars(Pci::Bdf bdf) : bdf(bdf) { }
+				virtual ~Device_bars() { };
+			};
+
 			/**
 			 * Constructor
 			 */
-			Device_config() : _vendor_id(INVALID_VENDOR) { }
+			Device_config() : _bdf({ .bus = 0, .device = 0, .function = 0 }) {
+				_vendor_id = INVALID_VENDOR; }
 
-			Device_config(unsigned bdf)
-			:
-				_bus((bdf >> 8) & 0xff),
-				_device((bdf >> 3) & 0x1f),
-				_function(bdf & 0x7)
-			{ }
+			Device_config(Pci::Bdf bdf) : _bdf(bdf) { }
 
-			Device_config(int bus, int device, int function,
-			              Config_access *pci_config):
-				_bus(bus), _device(device), _function(function)
+			Device_config(Pci::Bdf bdf, Config_access *pci_config) : _bdf(bdf)
 			{
-				_vendor_id = pci_config->read(bus, device, function, 0, Device::ACCESS_16BIT);
+				_vendor_id = pci_config->read(bdf, 0, Device::ACCESS_16BIT);
 
 				/* break here if device is invalid */
 				if (_vendor_id == INVALID_VENDOR)
 					return;
 
-				_device_id    = pci_config->read(bus, device, function, 2, Device::ACCESS_16BIT);
-				_class_code   = pci_config->read(bus, device, function, 8, Device::ACCESS_32BIT) >> 8;
+				_device_id    = pci_config->read(bdf, 2, Device::ACCESS_16BIT);
+				_class_code   = pci_config->read(bdf, 8, Device::ACCESS_32BIT) >> 8;
 				_class_code  &= 0xffffff;
-				_header_type  = pci_config->read(bus, device, function, 0xe, Device::ACCESS_8BIT);
+				_header_type  = pci_config->read(bdf, 0xe, Device::ACCESS_8BIT);
 				_header_type &= 0x7f;
 
 				/*
@@ -178,10 +197,12 @@ namespace Platform {
 				 * device. Note, the mf bit of function 1-7 is not significant
 				 * and may be set or unset.
 				 */
-				if (function != 0
-				 && !(pci_config->read(bus, device, 0, 0xe, Device::ACCESS_8BIT) & 0x80)) {
-					_vendor_id = INVALID_VENDOR;
-					return;
+				if (bdf.function != 0) {
+					Pci::Bdf const dev { .bus = bdf.bus, .device = bdf.device, .function = 0 };
+					if (!(pci_config->read(dev, 0xe, Device::ACCESS_8BIT) & 0x80)) {
+						_vendor_id = INVALID_VENDOR;
+						return;
+					}
 				}
 
 				/*
@@ -200,7 +221,7 @@ namespace Platform {
 
 					/* read base-address register value */
 					unsigned const bar_value =
-						pci_config->read(bus, device, function, bar_idx, Device::ACCESS_32BIT);
+						pci_config->read(bdf, bar_idx, Device::ACCESS_32BIT);
 
 					/* skip invalid resource BARs */
 					if (bar_value == ~0U || bar_value == 0U) {
@@ -216,9 +237,9 @@ namespace Platform {
 					 * corresponding to the resource size. Finally, we write
 					 * back the bar-address value as assigned by the BIOS.
 					 */
-					pci_config->write(bus, device, function, bar_idx, ~0, Device::ACCESS_32BIT);
-					unsigned const bar_size = pci_config->read(bus, device, function, bar_idx, Device::ACCESS_32BIT);
-					pci_config->write(bus, device, function, bar_idx, bar_value, Device::ACCESS_32BIT);
+					pci_config->write(bdf, bar_idx, ~0, Device::ACCESS_32BIT);
+					unsigned const bar_size = pci_config->read(bdf, bar_idx, Device::ACCESS_32BIT);
+					pci_config->write(bdf, bar_idx, bar_value, Device::ACCESS_32BIT);
 
 					if (!Resource::Bar::mem64(bar_value)) {
 						_resource[i] = Resource(bar_value, bar_size);
@@ -227,11 +248,11 @@ namespace Platform {
 						/* also consume next BAR for MEM64 */
 						unsigned const bar2_idx = bar_idx + 4;
 						unsigned const bar2_value =
-							pci_config->read(bus, device, function, bar2_idx, Device::ACCESS_32BIT);
-						pci_config->write(bus, device, function, bar2_idx, ~0, Device::ACCESS_32BIT);
+							pci_config->read(bdf, bar2_idx, Device::ACCESS_32BIT);
+						pci_config->write(bdf, bar2_idx, ~0, Device::ACCESS_32BIT);
 						unsigned const bar2_size =
-							pci_config->read(bus, device, function, bar2_idx, Device::ACCESS_32BIT);
-						pci_config->write(bus, device, function, bar2_idx, bar2_value, Device::ACCESS_32BIT);
+							pci_config->read(bdf, bar2_idx, Device::ACCESS_32BIT);
+						pci_config->write(bdf, bar2_idx, bar2_value, Device::ACCESS_32BIT);
 
 						/* combine into first resource and mark second as invalid */
 						_resource[i] = Resource(bar_value, bar_size,
@@ -244,23 +265,11 @@ namespace Platform {
 			}
 
 			/**
-			 * Accessor functions for device location
+			 * Accessor function for device location
 			 */
-			int bus_number()      { return _bus; }
-			int device_number()   { return _device; }
-			int function_number() { return _function; }
+			Pci::Bdf bdf() const { return _bdf; }
 
-			void print(Genode::Output &out) const
-			{
-				using Genode::print;
-				using Genode::Hex;
-				print(out, Hex(_bus, Hex::Prefix::OMIT_PREFIX, Hex::Pad::PAD),
-				      ":", Hex(_device, Hex::Prefix::OMIT_PREFIX, Hex::Pad::PAD),
-				      ".", Hex(_function, Hex::Prefix::OMIT_PREFIX));
-			}
-
-			Genode::uint16_t bdf () {
-				return (_bus << 8) | (_device << 3) | (_function & 0x7); }
+			void print(Output &out) const { Genode::print(out, bdf()); }
 
 			/**
 			 * Accessor functions for device information
@@ -298,8 +307,7 @@ namespace Platform {
 			unsigned read(Config_access &pci_config, unsigned char address,
 			              Device::Access_size size, bool track = true)
 			{
-				return pci_config.read(_bus, _device, _function, address,
-				                       size, track);
+				return pci_config.read(_bdf, address, size, track);
 			}
 
 			/**
@@ -309,8 +317,7 @@ namespace Platform {
 			           unsigned long value, Device::Access_size size,
 			           bool track = true)
 			{
-				pci_config.write(_bus, _device, _function, address, value,
-				                 size, track);
+				pci_config.write(_bdf, address, value, size, track);
 			}
 
 			bool reg_in_use(Config_access &pci_config, unsigned char address,
@@ -319,37 +326,66 @@ namespace Platform {
 
 			void disable_bus_master_dma(Config_access &pci_config)
 			{
-				unsigned const cmd = read(pci_config, PCI_CMD_REG,
-				                          Platform::Device::ACCESS_16BIT);
-				if (cmd & PCI_CMD_DMA)
-					write(pci_config, PCI_CMD_REG, cmd ^ PCI_CMD_DMA,
-					      Platform::Device::ACCESS_16BIT);
+				Pci_header header (pci_config, _bdf);
+
+				if (header.read<Pci_header::Command::Dma>())
+					header.write<Pci_header::Command::Dma>(0);
+			}
+
+			Device_bars save_bars()
+			{
+				Device_bars bars (_bdf);
+
+				for (unsigned r = 0; r < Device::NUM_RESOURCES; r++) {
+					if (!_resource_id_is_valid(r))
+						break;
+
+					bars.bar_addr[r] = _resource[r].base();
+				}
+
+				return bars;
+			};
+
+			void restore_bars(Config_access &config, Device_bars const &bars)
+			{
+				for (unsigned r = 0; r < Device::NUM_RESOURCES; r++) {
+					if (!_resource_id_is_valid(r))
+						break;
+
+					/* index of base-address register in configuration space */
+					unsigned const bar_idx = 0x10 + 4 * r;
+
+					/* PCI protocol to write address after requesting size */
+					config.write(_bdf, bar_idx, ~0U, Device::ACCESS_32BIT);
+					config.read (_bdf, bar_idx, Device::ACCESS_32BIT);
+					config.write(_bdf, bar_idx, bars.bar_addr[r],
+					             Device::ACCESS_32BIT);
+				}
 			}
 	};
 
-	class Config_space : private Genode::List<Config_space>::Element
+	class Config_space : private List<Config_space>::Element
 	{
 		private:
 
-			friend class Genode::List<Config_space>;
+			friend class List<Config_space>;
 
-			Genode::uint32_t _bdf_start;
-			Genode::uint32_t _func_count;
-			Genode::addr_t   _base;
+			uint32_t _bdf_start;
+			uint32_t _func_count;
+			addr_t   _base;
 
 		public:
 
-			using Genode::List<Config_space>::Element::next;
+			using List<Config_space>::Element::next;
 
-			Config_space(Genode::uint32_t bdf_start,
-			             Genode::uint32_t func_count, Genode::addr_t base)
+			Config_space(uint32_t bdf_start, uint32_t func_count, addr_t base)
 			:
 				_bdf_start(bdf_start), _func_count(func_count), _base(base) {}
 
-			Genode::addr_t lookup_config_space(Genode::uint32_t bdf)
+			addr_t lookup_config_space(Pci::Bdf const bdf)
 			{
-				if ((_bdf_start <= bdf) && (bdf <= _bdf_start + _func_count - 1))
-					return _base + (bdf << 12);
+				if ((_bdf_start <= bdf.value()) && (bdf.value() <= _bdf_start + _func_count - 1))
+					return _base + (unsigned(bdf.value()) << 12);
 				return 0;
 			}
 	};

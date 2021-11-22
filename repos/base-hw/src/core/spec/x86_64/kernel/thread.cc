@@ -18,6 +18,7 @@
 #include <kernel/thread.h>
 #include <kernel/pd.h>
 
+
 void Kernel::Thread::Tlb_invalidation::execute()
 {
 	/* invalidate cpu-local TLB */
@@ -25,13 +26,19 @@ void Kernel::Thread::Tlb_invalidation::execute()
 
 	/* if this is the last cpu, wake up the caller thread */
 	if (--cnt == 0) {
-		cpu_pool().work_list().remove(&_le);
+		global_work_list.remove(&_le);
 		caller._restart();
 	}
 };
 
 
 void Kernel::Thread::_call_cache_coherent_region() { }
+
+
+void Kernel::Thread::_call_cache_clean_invalidate_data_region() { }
+
+
+void Kernel::Thread::_call_cache_invalidate_data_region() { }
 
 
 void Kernel::Thread::proceed(Cpu & cpu)

@@ -11,6 +11,7 @@
  * under the terms of the GNU Affero General Public License version 3.
  */
 
+/* Genode includes */
 #include <vm_session/vm_session.h>
 
 /* local includes */
@@ -28,14 +29,14 @@ void Sandbox::Child::destroy_services()
 Sandbox::Child::Apply_config_result
 Sandbox::Child::apply_config(Xml_node start_node)
 {
-	if (_state == STATE_ABANDONED || _exited)
+	if (abandoned() || stuck() || restart_scheduled() || _exited)
 		return NO_SIDE_EFFECTS;
 
 	/*
-	 * If the child's environment is incomplete, restart it to attempt
-	 * the re-routing of its environment sessions.
+	 * If the child was started but its environment is incomplete, mark it as
+	 * being stuck in order to restart it once the environment changes.
 	 */
-	{
+	if (_state != State::INITIAL) {
 		bool env_log_exists = false, env_binary_exists = false;
 		_child.for_each_session([&] (Session_state const &session) {
 			Parent::Client::Id const id = session.id_at_client();
@@ -44,8 +45,8 @@ Sandbox::Child::apply_config(Xml_node start_node)
 		});
 
 		if (!env_binary_exists || !env_log_exists) {
-			abandon();
-			return MAY_HAVE_SIDE_EFFECTS;
+			_state = State::STUCK;
+			return NO_SIDE_EFFECTS;
 		}
 	}
 
@@ -62,13 +63,24 @@ Sandbox::Child::apply_config(Xml_node start_node)
 	if (start_node.differs_from(_start_node->xml())) {
 
 		/*
-		 * Start node changed
-		 *
+		 * The <route> node may affect the availability or unavailability
+		 * of dependencies.
+		 */
+		start_node.with_sub_node("route", [&] (Xml_node const &route) {
+			_start_node->xml().with_sub_node("route", [&] (Xml_node const &orig) {
+				if (route.differs_from(orig)) {
+					_construct_route_model_from_start_node(start_node);
+					_uncertain_dependencies = true; } }); });
+
+		/*
 		 * Determine how the inline config is affected.
 		 */
 		char const * const tag = "config";
 		bool const config_was_present = _start_node->xml().has_sub_node(tag);
 		bool const config_is_present  = start_node.has_sub_node(tag);
+
+		if (config_was_present != config_is_present)
+			_uncertain_dependencies = true;
 
 		if (config_was_present && !config_is_present)
 			config_update = CONFIG_VANISHED;
@@ -125,7 +137,10 @@ Sandbox::Child::apply_config(Xml_node start_node)
 		 * the binary's ROM session, triggering the restart of the
 		 * child.
 		 */
+		Binary_name const orig_binary_name = _binary_name;
 		_binary_name = _binary_from_xml(start_node, _unique_name);
+		if (orig_binary_name != _binary_name)
+			_uncertain_dependencies = true;
 
 		_heartbeat_enabled = start_node.has_sub_node("heartbeat");
 
@@ -136,8 +151,8 @@ Sandbox::Child::apply_config(Xml_node start_node)
 	/*
 	 * Apply change to '_config_rom_service'. This will
 	 * potentially result in a change of the "config" ROM route, which
-	 * may in turn prompt the routing-check below to abandon (restart)
-	 * the child.
+	 * may in turn prompt the routing-check by 'evaluate_dependencies'
+	 * to restart the child.
 	 */
 	switch (config_update) {
 	case CONFIG_UNCHANGED:                                       break;
@@ -146,23 +161,36 @@ Sandbox::Child::apply_config(Xml_node start_node)
 	case CONFIG_VANISHED: _config_rom_service->abandon();        break;
 	}
 
-	/* validate that the routes of all existing sessions remain intact */
-	{
-		bool routing_changed = false;
-		_child.for_each_session([&] (Session_state const &session) {
-			if (!_route_valid(session))
-				routing_changed = true; });
-
-		if (routing_changed) {
-			abandon();
-			return MAY_HAVE_SIDE_EFFECTS;
-		}
-	}
-
 	if (provided_services_changed)
-		return MAY_HAVE_SIDE_EFFECTS;
+		return PROVIDED_SERVICES_CHANGED;
 
 	return NO_SIDE_EFFECTS;
+}
+
+
+void Sandbox::Child::evaluate_dependencies()
+{
+	bool any_route_changed     = false;
+	bool any_route_unavailable = false;
+
+	_child.for_each_session([&] (Session_state const &session) {
+
+		switch (_route_valid(session)) {
+		case Route_state::VALID:       break;
+		case Route_state::UNAVAILABLE: any_route_unavailable = true; break;
+		case Route_state::MISMATCH:    any_route_changed     = true; break;
+		}
+	});
+
+	_uncertain_dependencies = false;
+
+	if (any_route_unavailable) {
+		_state = State::STUCK;
+		return;
+	}
+
+	if (any_route_changed || stuck())
+		_schedule_restart();
 }
 
 
@@ -327,9 +355,6 @@ void Sandbox::Child::report_state(Xml_generator &xml, Report_detail const &detai
 	if (abandoned())
 		return;
 
-	/* true if it's safe to call the PD for requesting resource information */
-	bool const pd_alive = !abandoned() && !_exited;
-
 	xml.node("child", [&] () {
 
 		xml.attribute("name",   _unique_name);
@@ -341,7 +366,7 @@ void Sandbox::Child::report_state(Xml_generator &xml, Report_detail const &detai
 		if (detail.ids())
 			xml.attribute("id", _id.value);
 
-		if (!_child.active())
+		if (stuck() || _state == State::RAM_INITIALIZED)
 			xml.attribute("state", "incomplete");
 
 		if (_exited)
@@ -356,8 +381,8 @@ void Sandbox::Child::report_state(Xml_generator &xml, Report_detail const &detai
 				xml.attribute("assigned", String<32> {
 					Number_of_bytes(_resources.assigned_ram_quota.value) });
 
-				if (pd_alive)
-					generate_ram_info(xml, _child.pd());
+				if (_pd_alive())
+					Ram_info::from_pd(_child.pd()).generate(xml);
 
 				if (_requested_resources.constructed() && _requested_resources->ram.value)
 					xml.attribute("requested", String<32>(_requested_resources->ram));
@@ -369,8 +394,8 @@ void Sandbox::Child::report_state(Xml_generator &xml, Report_detail const &detai
 
 				xml.attribute("assigned", String<32>(_resources.assigned_cap_quota));
 
-				if (pd_alive)
-					generate_caps_info(xml, _child.pd());
+				if (_pd_alive())
+					Cap_info::from_pd(_child.pd()).generate(xml);
 
 				if (_requested_resources.constructed() && _requested_resources->caps.value)
 					xml.attribute("requested", String<32>(_requested_resources->caps));
@@ -402,6 +427,20 @@ void Sandbox::Child::report_state(Xml_generator &xml, Report_detail const &detai
 }
 
 
+Sandbox::Child::Sample_state_result Sandbox::Child::sample_state()
+{
+	if (!_pd_alive())
+		return Sample_state_result::UNCHANGED;
+
+	Sampled_state const orig_state = _sampled_state;
+
+	_sampled_state = Sampled_state::from_pd(_child.pd());
+
+	return (orig_state != _sampled_state) ? Sample_state_result::CHANGED
+	                                      : Sample_state_result::UNCHANGED;
+}
+
+
 void Sandbox::Child::init(Pd_session &session, Pd_session_capability cap)
 {
 	session.ref_account(_env.pd_session_cap());
@@ -409,11 +448,29 @@ void Sandbox::Child::init(Pd_session &session, Pd_session_capability cap)
 	size_t const initial_session_costs =
 		session_alloc_batch_size()*_child.session_factory().session_costs();
 
-	Ram_quota const ram_quota { _resources.effective_ram_quota().value > initial_session_costs
-	                          ? _resources.effective_ram_quota().value - initial_session_costs
-	                          : 0 };
+	Ram_quota ram_quota { _resources.effective_ram_quota().value > initial_session_costs
+	                    ? _resources.effective_ram_quota().value - initial_session_costs
+	                    : 0 };
 
-	Cap_quota const cap_quota { _resources.effective_cap_quota().value };
+	Ram_quota avail_ram = _ram_limit_accessor.resource_limit(Ram_quota());
+
+	avail_ram = Genode::Child::effective_quota(avail_ram);
+
+	if (ram_quota.value > avail_ram.value) {
+		warning(name(), ": configured RAM exceeds available RAM, proceed with ", avail_ram);
+		ram_quota = avail_ram;
+	}
+
+	Cap_quota cap_quota { _resources.effective_cap_quota().value };
+
+	Cap_quota avail_caps = _cap_limit_accessor.resource_limit(avail_caps);
+
+	avail_caps = Genode::Child::effective_quota(avail_caps);
+
+	if (cap_quota.value > avail_caps.value) {
+		warning(name(), ": configured caps exceed available caps, proceed with ", avail_caps);
+		cap_quota = avail_caps;
+	}
 
 	try { _env.pd().transfer_quota(cap, cap_quota); }
 	catch (Out_of_caps) {
@@ -449,9 +506,10 @@ Sandbox::Child::resolve_session_request(Service::Name const &service_name,
                                         Session_label const &label,
                                         Session::Diag const  diag)
 {
+	bool const rom_service = (service_name == Rom_session::service_name());
+
 	/* check for "config" ROM request */
-	if (service_name == Rom_session::service_name() &&
-	    label.last_element() == "config") {
+	if (rom_service && label.last_element() == "config") {
 
 		if (_config_rom_service.constructed() &&
 		   !_config_rom_service->abandoned())
@@ -473,113 +531,89 @@ Sandbox::Child::resolve_session_request(Service::Name const &service_name,
 	 * we resolve the session request with the binary name as label.
 	 * Otherwise the regular routing is applied.
 	 */
-	if (service_name == Rom_session::service_name() &&
-	    label == _unique_name && _unique_name != _binary_name)
+	if (rom_service && label == _unique_name && _unique_name != _binary_name)
 		return resolve_session_request(service_name, _binary_name, diag);
 
 	/* supply binary as dynamic linker if '<start ld="no">' */
-	if (!_use_ld && service_name == Rom_session::service_name() && label == "ld.lib.so")
+	if (rom_service && !_use_ld && label == "ld.lib.so")
 		return resolve_session_request(service_name, _binary_name, diag);
 
 	/* check for "session_requests" ROM request */
-	if (service_name == Rom_session::service_name()
-	 && label.last_element() == Session_requester::rom_name())
+	if (rom_service && label.last_element() == Session_requester::rom_name())
 		return Route { _session_requester.service(), Session::Label(), diag };
 
-	try {
-		Xml_node route_node = _default_route_accessor.default_route();
-		try {
-			route_node = _start_node->xml().sub_node("route"); }
-		catch (...) { }
-		Xml_node service_node = route_node.sub_node();
+	auto resolve_at_target = [&] (Xml_node const &target) -> Route
+	{
+		/*
+		 * Determine session label to be provided to the server
+		 *
+		 * By default, the client's identity (accompanied with the a
+		 * client-provided label) is presented as session label to the
+		 * server. However, the target node can explicitly override the
+		 * client's identity by a custom label via the 'label'
+		 * attribute.
+		 */
+		typedef String<Session_label::capacity()> Label;
+		Label const target_label =
+			target.attribute_value("label", Label(label.string()));
 
-		for (; ; service_node = service_node.next()) {
+		Session::Diag const
+			target_diag { target.attribute_value("diag", diag.enabled) };
 
-			bool service_wildcard = service_node.has_type("any-service");
+		auto no_filter = [] (Service &) -> bool { return false; };
 
-			if (!service_node_matches(service_node, label, name(), service_name))
-				continue;
+		if (target.has_type("parent")) {
 
-			Xml_node target = service_node.sub_node();
-			for (; ; target = target.next()) {
-
-				/*
-				 * Determine session label to be provided to the server
-				 *
-				 * By default, the client's identity (accompanied with the a
-				 * client-provided label) is presented as session label to the
-				 * server. However, the target node can explicitly override the
-				 * client's identity by a custom label via the 'label'
-				 * attribute.
-				 */
-				typedef String<Session_label::capacity()> Label;
-				Label const target_label =
-					target.attribute_value("label", Label(label.string()));
-
-				Session::Diag const
-					target_diag { target.attribute_value("diag", diag.enabled) };
-
-				auto no_filter = [] (Service &) -> bool { return false; };
-
-				if (target.has_type("parent")) {
-
-					try {
-						return Route { find_service(_parent_services, service_name, no_filter),
-						               target_label, target_diag };
-					} catch (Service_denied) { }
-				}
-
-				if (target.has_type("local")) {
-
-					try {
-						return Route { find_service(_local_services, service_name, no_filter),
-						               target_label, target_diag };
-					} catch (Service_denied) { }
-				}
-
-				if (target.has_type("child")) {
-
-					typedef Name_registry::Name Name;
-					Name server_name = target.attribute_value("name", Name());
-					server_name = _name_registry.deref_alias(server_name);
-
-					auto filter_server_name = [&] (Routed_service &s) -> bool {
-						return s.child_name() != server_name; };
-
-					try {
-						return Route { find_service(_child_services, service_name, filter_server_name),
-						               target_label, target_diag };
-
-					} catch (Service_denied) { }
-				}
-
-				if (target.has_type("any-child")) {
-
-					if (is_ambiguous(_child_services, service_name)) {
-						error(name(), ": ambiguous routes to "
-						      "service \"", service_name, "\"");
-						throw Service_denied();
-					}
-					try {
-						return Route { find_service(_child_services, service_name, no_filter),
-						               target_label, target_diag };
-
-					} catch (Service_denied) { }
-				}
-
-				if (!service_wildcard) {
-					warning(name(), ": lookup for service \"", service_name, "\" failed");
-					throw Service_denied();
-				}
-
-				if (target.last())
-					break;
-			}
+			try {
+				return Route { find_service(_parent_services, service_name, no_filter),
+				               target_label, target_diag };
+			} catch (Service_denied) { }
 		}
-	} catch (Xml_node::Nonexistent_sub_node) { }
 
-	warning(name(), ": no route to service \"", service_name, "\" (label=\"", label, "\")");
-	throw Service_denied();
+		if (target.has_type("local")) {
+
+			try {
+				return Route { find_service(_local_services, service_name, no_filter),
+				               target_label, target_diag };
+			} catch (Service_denied) { }
+		}
+
+		if (target.has_type("child")) {
+
+			typedef Name_registry::Name Name;
+			Name server_name = target.attribute_value("name", Name());
+			server_name = _name_registry.deref_alias(server_name);
+
+			auto filter_server_name = [&] (Routed_service &s) -> bool {
+				return s.child_name() != server_name; };
+
+			try {
+				return Route { find_service(_child_services, service_name,
+				               filter_server_name), target_label, target_diag };
+
+			} catch (Service_denied) { }
+		}
+
+		if (target.has_type("any-child")) {
+
+			if (is_ambiguous(_child_services, service_name)) {
+				error(name(), ": ambiguous routes to "
+				      "service \"", service_name, "\"");
+				throw Service_denied();
+			}
+			try {
+				return Route { find_service(_child_services, service_name,
+				               no_filter), target_label, target_diag };
+
+			} catch (Service_denied) { }
+		}
+
+		throw Service_denied();
+	};
+
+	Route_model::Query const query(name(), service_name, label);
+
+	return _route_model->resolve(query, resolve_at_target);
 }
 
 
@@ -665,8 +699,8 @@ Genode::Affinity Sandbox::Child::filter_session_affinity(Affinity const &session
 	/* subordinate session affinity to child affinity subspace */
 	Affinity::Location location(child_session
 	                            .multiply_position(session_space)
-	                            .transpose(session_location.xpos() * child_space.width(),
-	                                       session_location.ypos() * child_space.height()));
+	                            .transpose(session_location.xpos() * child_location.width(),
+	                                       session_location.ypos() * child_location.height()));
 
 	return Affinity(space, location);
 }
@@ -707,8 +741,6 @@ Sandbox::Child::Child(Env                      &env,
                       Default_route_accessor   &default_route_accessor,
                       Default_caps_accessor    &default_caps_accessor,
                       Name_registry            &name_registry,
-                      Ram_quota                 ram_limit,
-                      Cap_quota                 cap_limit,
                       Ram_limit_accessor       &ram_limit_accessor,
                       Cap_limit_accessor       &cap_limit_accessor,
                       Prio_levels               prio_levels,
@@ -728,8 +760,7 @@ Sandbox::Child::Child(Env                      &env,
 	_name_registry(name_registry),
 	_heartbeat_enabled(start_node.has_sub_node("heartbeat")),
 	_resources(_resources_from_start_node(start_node, prio_levels, affinity_space,
-	                                      default_caps_accessor.default_caps(), cap_limit)),
-	_resources_clamped_to_limit((_clamp_resources(ram_limit, cap_limit), true)),
+	                                      default_caps_accessor.default_caps())),
 	_parent_services(parent_services),
 	_child_services(child_services),
 	_local_services(local_services),
@@ -742,6 +773,8 @@ Sandbox::Child::Child(Env                      &env,
 		log("  ELF binary: ", _binary_name);
 		log("  priority:   ", _resources.priority);
 	}
+
+	_construct_route_model_from_start_node(start_node);
 
 	/*
 	 * Determine services provided by the child

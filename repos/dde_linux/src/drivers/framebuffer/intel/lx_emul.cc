@@ -24,26 +24,26 @@
 /* DRM-specific includes */
 #include <lx_emul.h>
 #include <lx_emul_c.h>
-#include <lx_emul/extern_c_begin.h>
+#include <legacy/lx_emul/extern_c_begin.h>
 #include <drm/drmP.h>
 #include <drm/drm_gem.h>
 #include "drm_crtc_internal.h"
-#include <lx_emul/extern_c_end.h>
+#include <legacy/lx_emul/extern_c_end.h>
 #include <drm/i915_drm.h>
 
-#include <lx_emul/impl/kernel.h>
-#include <lx_emul/impl/delay.h>
-#include <lx_emul/impl/slab.h>
-#include <lx_emul/impl/gfp.h>
-#include <lx_emul/impl/io.h>
-#include <lx_emul/impl/pci.h>
-#include <lx_emul/impl/work.h>
-#include <lx_emul/impl/spinlock.h>
-#include <lx_emul/impl/mutex.h>
-#include <lx_emul/impl/sched.h>
-#include <lx_emul/impl/timer.h>
-#include <lx_emul/impl/completion.h>
-#include <lx_emul/impl/wait.h>
+#include <legacy/lx_emul/impl/kernel.h>
+#include <legacy/lx_emul/impl/delay.h>
+#include <legacy/lx_emul/impl/slab.h>
+#include <legacy/lx_emul/impl/gfp.h>
+#include <legacy/lx_emul/impl/io.h>
+#include <legacy/lx_emul/impl/pci.h>
+#include <legacy/lx_emul/impl/work.h>
+#include <legacy/lx_emul/impl/spinlock.h>
+#include <legacy/lx_emul/impl/mutex.h>
+#include <legacy/lx_emul/impl/sched.h>
+#include <legacy/lx_emul/impl/timer.h>
+#include <legacy/lx_emul/impl/completion.h>
+#include <legacy/lx_emul/impl/wait.h>
 
 static struct drm_device * lx_drm_device = nullptr;
 
@@ -161,7 +161,7 @@ void Framebuffer::Driver::finish_initialization()
 }
 
 
-#include <lx_kit/irq.h>
+#include <legacy/lx_kit/irq.h>
 
 void Framebuffer::Driver::_poll()
 {
@@ -1992,6 +1992,13 @@ int acpi_reconfig_notifier_register(struct notifier_block *nb)
 {
 	Genode::warning(__func__, " called");
 	return 0;
+}
+
+
+void aperture_exit()
+{
+	Genode::error("Error: no space in aperture left");
+	Lx_kit::env().env().parent().exit(1);
 }
 
 } /* extern "C" */

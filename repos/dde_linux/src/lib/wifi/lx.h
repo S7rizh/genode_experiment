@@ -17,8 +17,11 @@
 /* Genode includes */
 #include <base/allocator.h>
 
+/* NIC driver includes */
+#include <drivers/nic/mode.h>
+
 /* local includes */
-#include <lx_kit/scheduler.h>
+#include <legacy/lx_kit/scheduler.h>
 
 
 #define DEBUG_PRINTK     1
@@ -35,7 +38,7 @@ namespace Lx
 
 	void nic_init(Genode::Env&, Genode::Allocator&);
 
-	Genode::Ram_dataspace_capability backend_alloc(Genode::addr_t, Genode::Cache_attribute);
+	Genode::Ram_dataspace_capability backend_alloc(Genode::addr_t, Genode::Cache);
 	void backend_free(Genode::Ram_dataspace_capability);
 
 	void get_mac_address(unsigned char *);

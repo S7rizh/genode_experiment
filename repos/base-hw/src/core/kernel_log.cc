@@ -12,26 +12,20 @@
  * under the terms of the GNU Affero General Public License version 3.
  */
 
-/* base-internal includes */
-#include <base/internal/unmanaged_singleton.h>
-
-#include <board.h>
-#include <platform.h>
+/* base-hw Core includes */
+#include <kernel/main.h>
 #include <kernel/log.h>
 
 
 void Kernel::log(char const c)
 {
-	using namespace Board;
-
 	enum {
 		ASCII_LINE_FEED = 10,
 		ASCII_CARRIAGE_RETURN = 13,
-		BAUD_RATE = 115200
 	};
 
-	static Serial serial { Genode::Platform::mmio_to_virt(UART_BASE),
-	                       UART_CLOCK, BAUD_RATE };
-	if (c == ASCII_LINE_FEED) serial.put_char(ASCII_CARRIAGE_RETURN);
-	serial.put_char(c);
+	if (c == ASCII_LINE_FEED)
+		main_print_char(ASCII_CARRIAGE_RETURN);
+
+	main_print_char(c);
 }

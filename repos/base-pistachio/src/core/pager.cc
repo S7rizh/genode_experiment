@@ -18,18 +18,11 @@
 /* base-internal includes */
 #include <base/internal/native_thread.h>
 #include <base/internal/capability_space_tpl.h>
+#include <base/internal/pistachio.h>
 
 /* core includes */
 #include <ipc_pager.h>
 #include <pager.h>
-
-namespace Pistachio
-{
-#include <l4/message.h>
-#include <l4/ipc.h>
-#include <l4/schedule.h>
-#include <l4/kdebug.h>
-}
 
 using namespace Genode;
 using namespace Pistachio;
@@ -39,24 +32,21 @@ using namespace Pistachio;
  ** Mapping **
  *************/
 
-Mapping::Mapping(addr_t dst_addr, addr_t src_addr,
-                 Cache_attribute, bool, unsigned l2size,
-                 bool rw, bool)
+/**
+ * Prepare map operation
+ *
+ * On Pistachio, we need to map a page locally to be able to map it to another
+ * address space.
+ */
+void Mapping::prepare_map_operation() const
 {
-	bool const grant = false;
+	uint8_t * const core_local_addr = (uint8_t *)src_addr;
 
-	L4_Fpage_t fpage = L4_FpageLog2(src_addr, l2size);
-
-	fpage += rw ? L4_FullyAccessible : L4_Readable;
-
-	if (grant)
-		_grant_item = L4_GrantItem(fpage, dst_addr);
+	if (writeable)
+		touch_read_write(core_local_addr);
 	else
-		_map_item = L4_MapItem(fpage, dst_addr);
+		touch_read(core_local_addr);
 }
-
-
-Mapping::Mapping() { _map_item = L4_MapItem(L4_Nilpage, 0); }
 
 
 /***************

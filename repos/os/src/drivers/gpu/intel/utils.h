@@ -29,13 +29,14 @@ namespace Utils {
 	 */
 	struct Backend_alloc : Genode::Interface
 	{
-		virtual Ram alloc(Genode::Allocator_guard &, Genode::size_t) = 0;
-		virtual void free(Genode::Allocator_guard &, Ram) = 0;
+		virtual Ram alloc(Genode::size_t) = 0;
+		virtual Ram alloc(Genode::size_t, Genode::Cap_quota_guard &, Genode::Ram_quota_guard&) = 0;
+		virtual void free(Ram) = 0;
 	};
 
 	template <unsigned int ELEMENTS> class Address_map;
 
-	void clflush(volatile void *addr)
+	inline void clflush(volatile void *addr)
 	{
 		asm volatile("clflush %0" : "+m" (*(volatile char *)addr));
 	}

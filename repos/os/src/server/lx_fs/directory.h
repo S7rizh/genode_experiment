@@ -2,6 +2,8 @@
  * \brief  File-system directory node
  * \author Norman Feske
  * \author Christian Helmuth
+ * \author Emery Hemingway
+ * \author Sid Hussmann
  * \date   2013-11-11
  */
 
@@ -19,12 +21,13 @@
 #include <file_system/util.h>
 #include <os/path.h>
 
-/* local includes */
-#include <node.h>
-#include <file.h>
-
-#include <lx_util.h>
+/* libc includes */
 #include <stdio.h>
+
+/* local includes */
+#include "file.h"
+#include "lx_util.h"
+#include "node.h"
 
 
 namespace Lx_fs {
@@ -43,8 +46,6 @@ class Lx_fs::Directory : public Node
 		 */
 		Directory(Directory const &);
 		Directory &operator = (Directory const &);
-
-		typedef Genode::Path<MAX_PATH_LEN> Path;
 
 		DIR       *_fd;
 		Path       _path;
@@ -222,9 +223,9 @@ class Lx_fs::Directory : public Node
 			e = {
 				.inode = (unsigned long)dent->d_ino,
 				.type  = type(dent->d_type),
-				.rwx   = { .readable   = (st.st_mode & S_IRUSR),
-				           .writeable  = (st.st_mode & S_IWUSR),
-				           .executable = (st.st_mode & S_IXUSR) },
+				.rwx   = { .readable   = (st.st_mode & S_IRUSR) != 0,
+				           .writeable  = (st.st_mode & S_IWUSR) != 0,
+				           .executable = (st.st_mode & S_IXUSR) != 0},
 				.name  = { dent->d_name }
 			};
 
@@ -254,12 +255,17 @@ class Lx_fs::Directory : public Node
 			return {
 				.size  = _num_entries() * sizeof(File_system::Directory_entry),
 				.type  = Node_type::DIRECTORY,
-				.rwx   = { .readable   = (st.st_mode & S_IRUSR),
-				           .writeable  = (st.st_mode & S_IWUSR),
-				           .executable = (st.st_mode & S_IXUSR) },
+				.rwx   = { .readable   = (st.st_mode & S_IRUSR) != 0,
+				           .writeable  = (st.st_mode & S_IWUSR) != 0,
+				           .executable = (st.st_mode & S_IXUSR) != 0},
 				.inode = inode(),
 				.modification_time = { st.st_mtime }
 			};
+		}
+
+		Path path() const override
+		{
+			return _path;
 		}
 };
 

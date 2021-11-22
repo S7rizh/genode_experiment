@@ -291,7 +291,7 @@ struct Genode::Pd_session : Session, Ram_allocator
 	/**
 	 * Common base class of kernel-specific PD interfaces
 	 */
-	struct Native_pd : Interface { };
+	struct Native_pd;
 
 	/**
 	 * Return capability to kernel-specific PD operations
@@ -350,7 +350,7 @@ struct Genode::Pd_session : Session, Ram_allocator
 
 	GENODE_RPC_THROW(Rpc_alloc, Ram_dataspace_capability, alloc,
 	                 GENODE_TYPE_LIST(Out_of_ram, Out_of_caps, Undefined_ref_account),
-	                 size_t, Cache_attribute);
+	                 size_t, Cache);
 	GENODE_RPC(Rpc_free, void, free, Ram_dataspace_capability);
 	GENODE_RPC_THROW(Rpc_transfer_ram_quota, void, transfer_quota,
 	                 GENODE_TYPE_LIST(Out_of_ram, Invalid_session, Undefined_ref_account),

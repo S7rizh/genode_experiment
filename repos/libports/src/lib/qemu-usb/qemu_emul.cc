@@ -6,13 +6,14 @@
  */
 
 /*
- * Copyright (C) 2015-2017 Genode Labs GmbH
+ * Copyright (C) 2015-2020 Genode Labs GmbH
  *
  * This file is part of the Genode OS framework, which is distributed
  * under the terms of the GNU Affero General Public License version 3.
  */
 
 /* Genode includes */
+#include <base/attached_rom_dataspace.h>
 #include <base/env.h>
 #include <base/log.h>
 #include <util/misc_math.h>
@@ -21,7 +22,8 @@
 #include <extern_c_begin.h>
 #include <qemu_emul.h>
 /* XHCIState is defined in this file */
-#include <hcd-xhci.c>
+#include <hcd-xhci.h>
+#include <hcd-xhci-pci.h>
 #include <extern_c_end.h>
 
 #include <qemu/usb.h>
@@ -34,11 +36,41 @@ static bool const verbose_irq  = false;
 static bool const verbose_iov  = false;
 static bool const verbose_mmio = false;
 
+
+namespace {
+
+/* keep in sync with hcd-xhci.c */
+#define OFF_OPER        0x40
+#define OFF_RUNTIME     0x1000
+#define OFF_PORTS       (OFF_OPER + 0x400)
+
+bool port_access(Genode::off_t offset)
+{
+	bool const v = (offset >= OFF_PORTS) && (offset < OFF_RUNTIME);
+	return v;
+}
+
+
+uint32_t port_index(Genode::off_t offset)
+{
+	return (offset - OFF_PORTS) / 0x10;
+}
+
+#undef OFF_OPER
+#undef OFF_RUNTIME
+#undef OFF_PORTS
+} /* anonymous namespace */
+
+
 extern "C" void _type_init_usb_register_types();
 extern "C" void _type_init_usb_host_register_types(Genode::Entrypoint*,
                                                    Genode::Allocator*,
                                                    Genode::Env *);
 extern "C" void _type_init_xhci_register_types();
+extern "C" void _type_init_xhci_pci_register_types();
+
+extern "C" void _type_init_host_webcam_register_types(Genode::Env &,
+                                                      Genode::Xml_node const &);
 
 extern Genode::Mutex _mutex;
 
@@ -52,7 +84,9 @@ static Genode::Allocator *_heap = nullptr;
 
 Qemu::Controller *Qemu::usb_init(Timer_queue &tq, Pci_device &pci,
                                  Genode::Entrypoint &ep,
-                                 Genode::Allocator &alloc, Genode::Env &env)
+                                 Genode::Allocator &alloc,
+                                 Genode::Env &env,
+                                 Genode::Xml_node const &config)
 {
 	_heap = &alloc;
 	_timer_queue = &tq;
@@ -60,7 +94,12 @@ Qemu::Controller *Qemu::usb_init(Timer_queue &tq, Pci_device &pci,
 
 	_type_init_usb_register_types();
 	_type_init_xhci_register_types();
+	_type_init_xhci_pci_register_types();
 	_type_init_usb_host_register_types(&ep, &alloc, &env);
+
+	config.with_sub_node("webcam", [&] (Genode::Xml_node const &node) {
+		_type_init_host_webcam_register_types(env, node);
+	});
 
 	return qemu_controller();
 }
@@ -105,7 +144,7 @@ void *memset(void *s, int c, size_t n) {
 	return Genode::memset(s, c, n); }
 
 
-void q_printf(char const *fmt, ...)
+void qemu_printf(char const *fmt, ...)
 {
 	enum { BUF_SIZE = 128 };
 	char buf[BUF_SIZE] { };
@@ -178,7 +217,11 @@ struct Wrapper
 	USBDevice      _usb_device;
 	BusState       _bus_state;
 	XHCIState     *_xhci_state = nullptr;
+	XHCIPciState  *_xhci_pci_state = nullptr;
 	USBHostDevice  _usb_host_device;
+
+	USBWebcamState     *_webcam_state = nullptr;
+	unsigned long       _webcam_state_size = 0;
 
 	ObjectClass         _object_class;
 	DeviceClass         _device_class;
@@ -201,6 +244,19 @@ struct Wrapper
 		    && ptr < ((char*)_xhci_state + sizeof(XHCIState)))
 			return true;
 
+		/*
+		 * XHCIPciState contains XHCIState, so let's play the same game.
+		 */
+		if (_xhci_pci_state != nullptr
+		    && ptr >= _xhci_pci_state
+		    && ptr < ((char*)_xhci_pci_state + sizeof(XHCIPciState)))
+			return true;
+
+		if (_webcam_state != nullptr
+		    && ptr >= _webcam_state
+		    && ptr < ((char*)_webcam_state + _webcam_state_size))
+			return true;
+
 		using addr_t = Genode::addr_t;
 
 		addr_t p = (addr_t)ptr;
@@ -217,10 +273,13 @@ struct Object_pool
 {
 	enum {
 		XHCI,            /* XHCI controller */
+		XHCI_PCI,        /* XHCI PCI controller */
 		USB_BUS,         /* bus driver */
 		USB_DEVICE,      /* USB device driver */
 		USB_HOST_DEVICE, /* USB host device driver */
-		MAX = 8          /* host devices (USB_HOST_DEVICE - MAX) */
+		USB_WEBCAM,      /* USB webcam device driver */
+		USB_FIRST_FREE,  /* first free device */
+		MAX = 14         /* host devices (USB_FIRST_FREE to MAX) */
 	};
 
 	bool used[MAX];
@@ -228,7 +287,7 @@ struct Object_pool
 
 	Wrapper *create_object()
 	{
-		for (unsigned i = USB_HOST_DEVICE + 1; i < MAX; i++) {
+		for (unsigned i = USB_FIRST_FREE; i < MAX; i++) {
 			if (used[i] == false) {
 				used[i] = true;
 				return &obj[i];
@@ -239,7 +298,7 @@ struct Object_pool
 
 	void free_object(Wrapper *w)
 	{
-		for (unsigned i = USB_HOST_DEVICE + 1; i < MAX; i++)
+		for (unsigned i = USB_FIRST_FREE; i < MAX; i++)
 			if (w == &obj[i]) {
 				used[i] = false;
 				break;
@@ -284,6 +343,10 @@ struct XHCIState *cast_XHCIState(void *ptr) {
 	return Object_pool::p()->find_object(ptr)->_xhci_state; }
 
 
+struct XHCIPciState *cast_XHCIPciState(void *ptr) {
+	return Object_pool::p()->find_object(ptr)->_xhci_pci_state; }
+
+
 struct DeviceState *cast_DeviceState(void *ptr) {
 	return &Object_pool::p()->find_object(ptr)->_device_state; }
 
@@ -308,6 +371,10 @@ struct DeviceClass *cast_DeviceClass(void *ptr) {
 	return &Object_pool::p()->find_object(ptr)->_device_class; }
 
 
+struct USBWebcamState *cast_USBWebcamState(void *ptr) {
+	return Object_pool::p()->find_object(ptr)->_webcam_state; }
+
+
 struct USBDeviceClass *cast_USBDeviceClass(void *ptr) {
 	return &Object_pool::p()->find_object(ptr)->_usb_device_class; }
 
@@ -328,7 +395,8 @@ struct USBBus *cast_DeviceStateToUSBBus(void) {
 	return &Object_pool::p()->xhci_state()->bus; }
 
 
-USBHostDevice *create_usbdevice(void *data)
+template <typename FUNC>
+static USBHostDevice *_create_usbdevice(int const type, FUNC const &fn_init)
 {
 	Wrapper *obj = Object_pool::p()->create_object();
 	if (!obj) {
@@ -336,7 +404,7 @@ USBHostDevice *create_usbdevice(void *data)
 		return nullptr;
 	}
 
-	obj->_usb_device_class = Object_pool::p()->obj[Object_pool::USB_HOST_DEVICE]._usb_device_class;
+	obj->_usb_device_class = Object_pool::p()->obj[type]._usb_device_class;
 
 	/*
 	 * Set parent bus object
@@ -344,8 +412,10 @@ USBHostDevice *create_usbdevice(void *data)
 	DeviceState *dev_state = &obj->_device_state;
 	dev_state->parent_bus  = Object_pool::p()->bus();
 
-	/* set data pointer */
-	obj->_usb_host_device.data = data;
+	obj->_usb_device.qdev.parent_bus = dev_state->parent_bus;
+
+	/* per type initialization */
+	fn_init(*obj);
 
 	/*
 	 * Attach new USB host device to USB device driver
@@ -357,13 +427,23 @@ USBHostDevice *create_usbdevice(void *data)
 		error_free(e);
 		e = nullptr;
 
-		usb_device_class->unrealize(dev_state, &e);
+		usb_device_class->unrealize(dev_state);
 		Object_pool::p()->free_object(obj);
 
 		return nullptr;
 	}
 
 	return &obj->_usb_host_device;
+}
+
+
+USBHostDevice *create_usbdevice(void *data)
+{
+	return _create_usbdevice(Object_pool::USB_HOST_DEVICE,
+	                         [&](Wrapper &obj) {
+		/* set data pointer */
+		obj._usb_host_device.data = data;
+	});
 }
 
 
@@ -380,7 +460,7 @@ void remove_usbdevice(USBHostDevice *device)
 			Genode::error("usb_device_state null");
 
 		Error *e = nullptr;
-		usb_device_class->unrealize(usb_device_state, &e);
+		usb_device_class->unrealize(usb_device_state);
 
 		Wrapper *obj = Object_pool::p()->find_object(device);
 		if (obj)
@@ -409,12 +489,43 @@ Type type_register_static(TypeInfo const *t)
 {
 	if (!Genode::strcmp(t->name, TYPE_XHCI)) {
 		Wrapper *w = &Object_pool::p()->obj[Object_pool::XHCI];
-		w->_xhci_state = (XHCIState*) g_malloc(sizeof(XHCIState));
-		Genode::memset(w->_xhci_state, 0, sizeof(XHCIState));
+		{
+			Wrapper *p = &Object_pool::p()->obj[Object_pool::XHCI_PCI];
+			p->_xhci_pci_state = (XHCIPciState*) g_malloc(sizeof(XHCIPciState));
+			Genode::memset(p->_xhci_pci_state, 0, sizeof(XHCIPciState));
+
+			w->_xhci_state = (XHCIState*)&p->_xhci_pci_state->xhci;
+		}
 
 		t->class_init(&w->_object_class, 0);
 
 		properties_apply(w->_xhci_state, &w->_device_class);
+	}
+
+	if (!Genode::strcmp(t->name, TYPE_XHCI_PCI)) {
+		Wrapper *w = &Object_pool::p()->obj[Object_pool::XHCI_PCI];
+		w->_xhci_state = (XHCIState*)&w->_xhci_pci_state->xhci;
+
+		t->class_init(&w->_object_class, 0);
+
+		properties_apply(w->_xhci_pci_state, &w->_device_class);
+
+		t->instance_init((Object*)w->_xhci_pci_state);
+	}
+
+	if (!Genode::strcmp(t->name, TYPE_QEMU_XHCI)) {
+		Wrapper *w = &Object_pool::p()->obj[Object_pool::XHCI_PCI];
+
+		t->class_init(&w->_object_class, 0);
+		t->instance_init((Object*)w->_xhci_pci_state);
+
+		{
+			Wrapper *w = &Object_pool::p()->obj[Object_pool::XHCI];
+			DeviceState *dev       = &w->_device_state;
+			DeviceClass *dev_class = &w->_device_class;
+			Error *e;
+			dev_class->realize(dev, &e);
+		}
 
 		PCIDevice      *pci       = &w->_pci_device;
 		PCIDeviceClass *pci_class = &w->_pci_device_class;
@@ -436,6 +547,16 @@ Type type_register_static(TypeInfo const *t)
 		Wrapper *w = &Object_pool::p()->obj[Object_pool::USB_BUS];
 		ObjectClass *c = &w->_object_class;
 		t->class_init(c, 0);
+	}
+
+	if (!Genode::strcmp(t->name, "usb-webcam")) {
+		Wrapper *w = &Object_pool::p()->obj[Object_pool::USB_WEBCAM];
+		t->class_init(&w->_object_class, 0);
+
+		_create_usbdevice(Object_pool::USB_WEBCAM, [&](Wrapper &obj) {
+			obj._webcam_state = (USBWebcamState *)g_malloc(t->instance_size);
+			obj._webcam_state_size = t->instance_size;
+		});
 	}
 
 	return nullptr;
@@ -547,9 +668,21 @@ struct Controller : public Qemu::Controller
 		}
 	}
 
-	Genode::size_t mmio_size() const { return _mmio_size; }
+	/**************************
+	 ** Controller interface **
+	 **************************/
 
-	int    mmio_read(Genode::off_t offset, void *buf, Genode::size_t size)
+	Info info() const override
+	{
+		return Info {
+			.vendor_id = PCI_VENDOR_ID_REDHAT,
+			.product_id = PCI_DEVICE_ID_REDHAT_XHCI
+		};
+	}
+
+	Genode::size_t mmio_size() const override { return _mmio_size; }
+
+	int mmio_read(Genode::off_t offset, void *buf, Genode::size_t size) override
 	{
 		Genode::Mutex::Guard guard(_mutex);
 		Mmio &mmio        = find_region(offset);
@@ -560,8 +693,8 @@ struct Controller : public Qemu::Controller
 		/*
 		 * Handle port access
 		 */
-		if (offset >= (OFF_OPER + 0x400) && offset < OFF_RUNTIME) {
-			uint32_t port = (offset - 0x440) / 0x10;
+		if (port_access(offset)) {
+			uint32_t port = port_index(offset);
 			ptr = (void*)&Object_pool::p()->xhci_state()->ports[port];
 		}
 
@@ -575,7 +708,7 @@ struct Controller : public Qemu::Controller
 		return 0;
 	}
 
-	int    mmio_write(Genode::off_t offset, void const *buf, Genode::size_t size)
+	int mmio_write(Genode::off_t offset, void const *buf, Genode::size_t size) override
 	{
 		Genode::Mutex::Guard guard(_mutex);
 		Mmio &mmio        = find_region(offset);
@@ -588,8 +721,8 @@ struct Controller : public Qemu::Controller
 		/*
 		 * Handle port access
 		 */
-		if (offset >= (OFF_OPER + 0x400) && offset < OFF_RUNTIME) {
-			uint32_t port = (offset - 0x440) / 0x10;
+		if (port_access(offset)) {
+			uint32_t port = port_index(offset);
 			ptr = (void*)&Object_pool::p()->xhci_state()->ports[port];
 		}
 
@@ -637,21 +770,14 @@ void memory_region_add_subregion(MemoryRegion *mr, hwaddr offset, MemoryRegion *
  ** DMA **
  *********/
 
-int pci_dma_read(PCIDevice*, dma_addr_t addr, void *buf, dma_addr_t size)
-{
-	return _pci_device->read_dma(addr, buf, size);
-}
-
-
-int pci_dma_write(PCIDevice*, dma_addr_t addr, const void *buf, dma_addr_t size)
-{
-	return _pci_device->write_dma(addr, buf, size);
-}
-
-
 int dma_memory_read(AddressSpace*, dma_addr_t addr, void *buf, dma_addr_t size)
 {
 	return _pci_device->read_dma(addr, buf, size);
+}
+
+int dma_memory_write(AddressSpace *, dma_addr_t addr, const void *buf, dma_addr_t len)
+{
+	return _pci_device->write_dma(addr, buf, len);
 }
 
 
@@ -674,17 +800,20 @@ void pci_irq_assert(PCIDevice*)
 
 
 int msi_init(PCIDevice *pdev, uint8_t offset, unsigned int nr_vectors, bool msi64bit,
-             bool msi_per_vector_mask)
+             bool msi_per_vector_mask, Error **)
 {
 	return 0;
 }
 
 
 int msix_init(PCIDevice*, short unsigned int, MemoryRegion*, uint8_t, unsigned int, MemoryRegion*,
-              uint8_t, unsigned int, uint8_t)
+              uint8_t, unsigned int, uint8_t, Error **)
 {
 	return 0;
 }
+
+
+void msix_uninit(PCIDevice *dev, MemoryRegion *table_bar, MemoryRegion *pba_bar) { }
 
 
 bool msi_enabled(const PCIDevice *pdev)
@@ -835,7 +964,7 @@ size_t iov_to_buf(const struct iovec *iov, const unsigned int iov_cnt,
 }
 
 
-void pci_dma_sglist_init(QEMUSGList *sgl, PCIDevice*, int alloc_hint) {
+void qemu_sglist_init(QEMUSGList *sgl, DeviceState *, int alloc_hint, AddressSpace *) {
 	qemu_iovec_init(sgl, alloc_hint); }
 
 
@@ -849,6 +978,10 @@ void qemu_sglist_destroy(QEMUSGList *sgl) {
 
 int usb_packet_map(USBPacket *p, QEMUSGList *sgl)
 {
+	Qemu::Pci_device::Dma_direction dir =
+		(p->pid == USB_TOKEN_IN) ? Qemu::Pci_device::Dma_direction::IN
+		                         : Qemu::Pci_device::Dma_direction::OUT;
+
 	void *mem;
 
 	for (int i = 0; i < sgl->niov; i++) {
@@ -857,7 +990,7 @@ int usb_packet_map(USBPacket *p, QEMUSGList *sgl)
 
 		while (len) {
 			dma_addr_t xlen = len;
-			mem = _pci_device->map_dma(base, xlen);
+			mem = _pci_device->map_dma(base, xlen, dir);
 			if (verbose_iov)
 				Genode::log("mem: ", mem, " base: ", (void *)base, " len: ",
 				            Genode::Hex(len));
@@ -884,9 +1017,14 @@ err:
 
 void usb_packet_unmap(USBPacket *p, QEMUSGList *sgl)
 {
+	Qemu::Pci_device::Dma_direction dir =
+		(p->pid == USB_TOKEN_IN) ? Qemu::Pci_device::Dma_direction::IN
+		                         : Qemu::Pci_device::Dma_direction::OUT;
+
 	for (int i = 0; i < p->iov.niov; i++) {
 		_pci_device->unmap_dma(p->iov.iov[i].iov_base,
-		                       p->iov.iov[i].iov_len);
+		                       p->iov.iov[i].iov_len,
+		                       dir);
 	}
 }
 
@@ -921,3 +1059,28 @@ void error_propagate(Error **dst_errp, Error *local_err) {
 
 
 void error_free(Error *err) { g_free(err); }
+
+void error_append_hint(Error *const *errp, const char *fmt, ...)
+{
+}
+
+
+/*****************
+ ** qdev-core.c **
+ *****************/
+
+void device_class_set_props(DeviceClass *dc, Property *props)
+{
+	dc->props = props;
+}
+
+
+void device_legacy_reset(DeviceState *dev)
+{
+	DeviceClass *klass = DEVICE_GET_CLASS(dev);
+
+	// trace_qdev_reset(dev, object_get_typename(OBJECT(dev)));
+	if (klass->reset) {
+		klass->reset(dev);
+	}
+}

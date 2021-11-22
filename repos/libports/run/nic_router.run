@@ -11,7 +11,8 @@ proc test_timeout { } {
 }
 
 proc enable_test_1 { } { return 1 }
-proc enable_test_2 { } { return 1 }
+# disabled until #3992 is fixed
+proc enable_test_2 { } { return 0 }
 proc enable_test_3 { } { return 1 }
 proc enable_test_4 { } { return 1 }
 proc enable_test_5 { } { return 1 }
@@ -178,21 +179,24 @@ proc test_7_config { } {
 	if {[enable_test_7]} {
 
 		append config "
-			[client_config t7_d1_c1_tcp http dhcp       dhcp     dhcp          t7_d1_nic_router 2345 10.0.2.204]
-			[client_config t7_d1_c2_tcp http dhcp       dhcp     dhcp          nic_router       3456 10.0.2.240]
-			[client_config t7_d1_c3_tcp http dhcp       dhcp     dhcp          nic_router       3456 10.0.2.240]
-			[server_config t7_d2_s1_tcp http 10.0.2.204 10.0.2.1 255.255.255.0 nic_router       2345 ]
-			[server_config t7_d2_s2_tcp http 10.0.2.240 10.0.2.1 255.255.255.0 nic_router       3456 ]"
+			[client_config t7_d1_c1_tcp http dhcp         dhcp       dhcp          t7_d1_nic_router 2345 10.13.78.204]
+			[client_config t7_d1_c2_tcp http dhcp         dhcp       dhcp          nic_router       3456 10.13.78.240]
+			[client_config t7_d1_c3_tcp http dhcp         dhcp       dhcp          nic_router       3456 10.13.78.240]
+			[server_config t7_d2_s1_tcp http 10.13.78.204 10.13.78.1 255.255.255.0 nic_router       2345 ]
+			[server_config t7_d2_s2_tcp http 10.13.78.240 10.13.78.1 255.255.255.0 nic_router       3456 ]"
 
 		append config {
 			<start name="t7_d1_nic_router" caps="200" priority="-1">
 				<binary name="nic_router"/>
 				<resource name="RAM" quantum="10M"/>
-				<provides><service name="Nic"/></provides>
+				<provides>
+					<service name="Nic"/>
+					<service name="Uplink"/>
+				</provides>
 				<config>
 
 					<policy label_prefix="t7_d1" domain="downlink" />
-					<uplink                      domain="uplink"   />
+					<nic-client                  domain="uplink"   />
 
 					<domain name="uplink">
 						<nat domain="downlink" tcp-ports="6" />
@@ -201,9 +205,9 @@ proc test_7_config { } {
 					<domain name="downlink" interface="100.2.3.1/24">
 						<dhcp-server ip_first="100.2.3.2"
 						             ip_last="100.2.3.10"
-						             dns_server_from="uplink"/>
+						             dns_config_from="uplink"/>
 
-						<tcp dst="10.0.0.0/16">
+						<tcp dst="10.13.0.0/16">
 							<permit port="2345" domain="uplink" />
 						</tcp>
 					</domain>
@@ -234,13 +238,13 @@ proc test_7_router_config { } {
 
 			</dhcp-server>
 
-			<tcp dst="10.0.0.0/16">
+			<tcp dst="10.13.0.0/16">
 				<permit port="2345" domain="t7_d2" />
 				<permit port="3456" domain="t7_d2" />
 			</tcp>
 		</domain>
 
-		<domain name="t7_d2" interface="10.0.2.1/24">
+		<domain name="t7_d2" interface="10.13.78.1/24">
 			<nat domain="t7_d1" tcp-ports="18" />
 		</domain>} }
 }
@@ -286,7 +290,10 @@ append config {
 
 	<start name="nic_router" caps="400" priority="-1">
 		<resource name="RAM" quantum="10M"/>
-		<provides><service name="Nic"/></provides>
+		<provides>
+			<service name="Nic"/>
+			<service name="Uplink"/>
+		</provides>
 		<config verbose="no"
 		        verbose_packets="no"
 		        verbose_domain_state="yes"
@@ -305,7 +312,7 @@ append config {
 			        link_state_triggers="yes"
 			        interval_sec="60" />
 
-			<uplink domain="uplink"/>
+			<nic-client domain="uplink"/>
 
 			<domain name="uplink"
 			        interface="10.0.2.55/24"

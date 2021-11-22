@@ -2,10 +2,11 @@
  * \brief  Genode specific VirtualBox SUPLib supplements
  * \author Norman Feske
  * \author Alexander Boettcher
+ * \author Christian Helmuth
  */
 
 /*
- * Copyright (C) 2013-2019 Genode Labs GmbH
+ * Copyright (C) 2013-2021 Genode Labs GmbH
  *
  * This file is distributed under the terms of the GNU General Public License
  * version 2.
@@ -33,7 +34,7 @@
 	pCtx->REG.u64Base  = state->REG.value().base; \
 	pCtx->REG.Attr.u   = sel_ar_conv_from_genode(state->REG.value().ar)
 
-static inline bool svm_save_state(Genode::Vm_state * state, VM * pVM, PVMCPU pVCpu)
+static inline bool svm_save_state(Genode::Vcpu_state * state, VM * pVM, PVMCPU pVCpu)
 {
 	PCPUMCTX pCtx  = CPUMQueryGuestCtxPtr(pVCpu);
 
@@ -44,6 +45,14 @@ static inline bool svm_save_state(Genode::Vm_state * state, VM * pVM, PVMCPU pVC
 	GENODE_READ_SELREG(gs);
 	GENODE_READ_SELREG(ss);
 
+	if (   !pCtx->cs.Attr.n.u1Granularity
+	     && pCtx->cs.Attr.n.u1Present
+	     && pCtx->cs.u32Limit > UINT32_C(0xfffff))
+	{
+		Assert((pCtx->cs.u32Limit & 0xfff) == 0xfff);
+		pCtx->cs.Attr.n.u1Granularity = 1;
+	}
+
 	GENODE_SVM_ASSERT_SELREG(cs);
 	GENODE_SVM_ASSERT_SELREG(ds);
 	GENODE_SVM_ASSERT_SELREG(es);
@@ -53,6 +62,8 @@ static inline bool svm_save_state(Genode::Vm_state * state, VM * pVM, PVMCPU pVC
 
 	GENODE_READ_SELREG(ldtr);
 	GENODE_READ_SELREG(tr);
+
+	CPUMSetGuestEFER(pVCpu, CPUMGetGuestEFER(pVCpu) & ~uint64_t(MSR_K6_EFER_SVME));
 
 	return true;
 }
@@ -66,20 +77,18 @@ static inline bool svm_save_state(Genode::Vm_state * state, VM * pVM, PVMCPU pVC
 #define GENODE_WRITE_SELREG(REG) \
 	Assert(pCtx->REG.fFlags & CPUMSELREG_FLAGS_VALID); \
 	Assert(pCtx->REG.ValidSel == pCtx->REG.Sel); \
-	state->REG.value(Segment{pCtx->REG.Sel, sel_ar_conv_to_genode(pCtx->REG.Attr.u), \
-	                         pCtx->REG.u32Limit, pCtx->REG.u64Base});
+	state->REG.charge(Segment { .sel   = pCtx->REG.Sel, \
+	                            .ar    = sel_ar_conv_to_genode(pCtx->REG.Attr.u), \
+	                            .limit = pCtx->REG.u32Limit, \
+	                            .base  = pCtx->REG.u64Base });
 
-static inline bool svm_load_state(Genode::Vm_state * state, VM * pVM, PVMCPU pVCpu)
+static inline bool svm_load_state(Genode::Vcpu_state * state, VM * pVM, PVMCPU pVCpu)
 {
-	typedef Genode::Vm_state::Segment Segment;
+	typedef Genode::Vcpu_state::Segment Segment;
 
 	PCPUMCTX pCtx  = CPUMQueryGuestCtxPtr(pVCpu);
 
-	state->efer.value(pCtx->msrEFER | MSR_K6_EFER_SVME);
-	/* unimplemented */
-	if (CPUMIsGuestInLongModeEx(pCtx))
-		return false;
-	state->efer.value(state->efer.value() & ~MSR_K6_EFER_LME);
+	state->efer.charge(state->efer.value() | MSR_K6_EFER_SVME);
 
 	GENODE_WRITE_SELREG(es);
 	GENODE_WRITE_SELREG(ds);

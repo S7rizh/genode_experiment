@@ -626,7 +626,7 @@ extern "C" pid_t __sys_fork(void)
 		switch (stage) {
 		case Stage::FORK:
 			child = fork_kernel_routine();
-			stage = Stage::WAIT_FORK_READY; [[ fallthrough ]]
+			stage = Stage::WAIT_FORK_READY; [[ fallthrough ]];
 		case Stage::WAIT_FORK_READY:
 			if (child->running() || child->exited()) {
 				return Fn::COMPLETE;
@@ -720,6 +720,8 @@ extern "C" pid_t __sys_wait4(pid_t pid, int *status, int options, rusage *rusage
 
 		return Fn::INCOMPLETE;
 	});
+
+	file_descriptor_allocator()->update_append_libc_fds();
 
 	/*
 	 * The libc expects status information in bits 0..6 and the exit value

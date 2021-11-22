@@ -12,8 +12,14 @@ set use_vfs_block [expr $use_block_ram || $use_genode_iso]
 create_boot_directory
 
 import_from_depot [depot_user]/src/[base_src] \
+                  [depot_user]/src/event_filter \
                   [depot_user]/src/init \
-                  [depot_user]/src/nitpicker
+                  [depot_user]/src/nitpicker \
+                  [depot_user]/src/usb_host_drv \
+                  [depot_user]/src/usb_hid_drv \
+                  [depot_user]/src/vfs_import \
+                  [depot_user]/src/ps2_drv \
+                  [depot_user]/raw/drivers_interactive-pc
 
 if {$use_fs_rump} {
 	import_from_depot [depot_user]/src/vfs \
@@ -62,18 +68,16 @@ proc platform_drv_priority {} { return { priority="-1"} }
 
 set build_components {
 	drivers/rtc
-	drivers/ps2
 	app/seoul
 }
 
 if {$use_fancy_stuff} { set use_framebuffer 1 }
 
 lappend_if $use_block_vdi       build_components server/vdi_block
-lappend_if $use_usb             build_components drivers/usb
 lappend_if $use_vfs_block       build_components server/vfs_block
 lappend_if $use_drv_ahci        build_components drivers/ahci
 lappend_if $use_nic_session     build_components drivers/nic
-lappend_if $use_nic_bridge      build_components server/nic_bridge
+lappend_if $use_nic_session     build_components server/nic_router
 lappend_if $use_framebuffer     build_components drivers/framebuffer
 lappend_if $use_fancy_stuff     build_components app/status_bar
 lappend_if $use_fancy_stuff     build_components app/launchpad
@@ -207,14 +211,52 @@ append config {
 	<start name="rtc_drv" priority="-1">
 		<resource name="RAM" quantum="1M"/>
 		<provides><service name="Rtc"/></provides>
-	</start>}
+	</start>
 
-append_if [expr !$use_usb] config {
 	<start name="ps2_drv" priority="-1">
 		<resource name="RAM" quantum="3M"/>
 		<config/>
-		<route> <any-service><parent/> <any-child/> </any-service> </route>
-	</start> }
+		<route>
+			<service name="Event"> <child name="event_filter" label="ps2"/> </service>
+			<any-service><parent/> <any-child/> </any-service> </route>
+	</start>
+
+	<start name="event_filter" caps="90" priority="-1">
+		<resource name="RAM" quantum="1280K"/>
+		<provides> <service name="Event"/> </provides>
+		<route>
+			<service name="ROM" label="config"> <parent label="event_filter.config"/> </service>
+			<service name="Event"> <child name="nitpicker"/> </service>
+			<any-service><parent/><any-child/></any-service>
+		</route>
+	</start>
+
+	<start name="usb_drv" priority="-1" caps="120">
+		<binary name="x86_pc_usb_host_drv"/>
+		<resource name="RAM" quantum="12M"/>
+		<provides> <service name="Usb"/> </provides>
+		<config uhci="yes" ohci="yes" ehci="yes" xhci="yes">
+			<report devices="yes"/>
+			<policy label_prefix="usb_hid_drv" class="0x3"/>
+		</config>
+		<route>
+			<service name="Report"> <child name="report_rom"/> </service>
+			<any-service><parent/><any-child/></any-service>
+		</route>
+	</start>
+
+	<start name="usb_hid_drv" priority="-1" caps="140">
+		<resource name="RAM" quantum="11M"/>
+		<config use_report="yes"/>
+		<route>
+			<service name="Report"> <child name="report_rom"/> </service>
+			<service name="Event"> <child name="event_filter" label="usb"/> </service>
+			<service name="ROM" label="report"> <child name="report_rom"/> </service>
+			<service name="Usb"> <child name="usb_drv"/> </service>
+			<any-service><parent/><any-child/></any-service>
+		</route>
+	</start>}
+
 
 append_if $use_drv_ahci config {
 	<start name="ahci_drv" priority="-1">
@@ -329,22 +371,48 @@ append_if $use_genode_iso config {
 append_platform_drv_config
 
 append_if $use_nic_session config {
+
 	<start name="nic_drv" priority="-2">
 		<binary name="ipxe_nic_drv"/>
 		<resource name="RAM" quantum="8M"/>
-		<provides><service name="Nic"/></provides>
-	</start>
-}
-
-append_if [expr $use_nic_session && $use_nic_bridge] config {
-	<start name="nic_bridge" priority="-3">
-		<resource name="RAM" quantum="6M"/>
-		<provides><service name="Nic"/></provides>
-		<config> <default-policy/> </config>
 		<route>
-			<service name="Nic"><child name="nic_drv"/></service>
-			<any-service><parent/></any-service>
+			<service name="Uplink"><child name="nic_router"/></service>
+			<any-service><parent/><any-child/></any-service>
 		</route>
+	</start>
+
+	<start name="nic_router" caps="200" priority="-1">
+		<resource name="RAM" quantum="10M"/>
+		<provides>
+			<service name="Nic"/>
+			<service name="Uplink"/>
+		</provides>
+		<config verbose_domain_state="yes">
+
+			<policy label_prefix="seoul"      domain="downlink"/>
+			<policy label_prefix="launchpad"  domain="downlink"/>
+			<policy label_prefix="nic_drv"    domain="uplink"/>
+
+			<domain name="uplink">
+
+				<nat domain="downlink"
+				     tcp-ports="16384"
+				     udp-ports="16384"
+				     icmp-ids="16384"/>
+
+			</domain>
+
+			<domain name="downlink" interface="10.0.3.1/24">
+
+				<dhcp-server ip_first="10.0.3.55" ip_last="10.0.3.155" dns_config_from="uplink"/>
+
+				<tcp dst="0.0.0.0/0"><permit-any domain="uplink" /></tcp>
+				<udp dst="0.0.0.0/0"><permit-any domain="uplink" /></udp>
+				<icmp dst="0.0.0.0/0" domain="uplink"/>
+
+			</domain>
+
+		</config>
 	</start>
 }
 
@@ -359,15 +427,15 @@ append_if $use_framebuffer config {
 			<any-service> <parent/> </any-service>
 		</route>}
 append_if [expr $use_framebuffer &&  [have_include "power_on/qemu"]] config {
-		<config width="1280" height="960" depth="32" buffered="yes"/>}
+		<config width="1280" height="960"/>}
 append_if [expr $use_framebuffer && ![have_include "power_on/qemu"]] config {
-		<config buffered="yes"/>}
+		<config/>}
 append_if $use_framebuffer config {
 	</start> }
 
 if {!$use_fancy_stuff} {
 append config {
-	<start name="seoul" priority="-3" caps="800">
+	<start name="seoul" priority="-2" caps="1200">
 		<binary name="seoul"/>}
 append config "
 		<resource name=\"RAM\" quantum=\"$memory_vmm_vm\"/>"
@@ -376,10 +444,8 @@ append config {
 			<service name="Timer"><child name="timer"/></service>
 			<service name="ROM" label="config">
 				<parent label="vm_seoul.cfg"/> </service>}
-append_if [expr $use_nic_session && $use_nic_bridge] config {
-			<service name="Nic"> <child name="nic_bridge"/> </service>}
-append_if [expr $use_nic_session && !$use_nic_bridge] config {
-			<service name="Nic"> <child name="nic_drv"/> </service>}
+append_if [expr $use_nic_session] config {
+			<service name="Nic"> <child name="nic_router"/> </service>}
 append_if $use_genode_iso config {
 			<service name="ROM" unscoped_label="seoul"> <parent/> </service>
 			<service name="ROM" unscoped_label="ld.lib.so"> <parent/> </service>
@@ -395,14 +461,6 @@ append config {
 		</route>
 	</start> }
 }
-
-append_if $use_usb config {
-	<start name="usb_drv" priority="-1" caps="120">
-		<resource name="RAM" quantum="12M"/>
-		<config uhci="yes" ehci="yes" xhci="yes">
-			<hid/>
-		</config>
-	</start>}
 
 append config {
 	<start name="nitpicker" priority="-1" caps="120">
@@ -449,6 +507,7 @@ append config {
 		<provides> <service name="Report"/> <service name="ROM"/> </provides>
 		<config>
 			<policy label="status_bar -> focus" report="nitpicker -> focus"/>
+			<policy label="usb_hid_drv -> report" report="usb_drv -> devices"/>
 		</config>
 	</start>}
 
@@ -466,10 +525,10 @@ append_if $use_fancy_stuff config {
 			<any-service> <parent/> <any-child/> </any-service>
 		</route>
 	</start>
-	<start name="launchpad" priority="-2" caps="1500">
+	<start name="launchpad" priority="-2" caps="2000">
 		<resource name="RAM" quantum="64000M"/>
 		<route>
-			<service name="Nic"> <child name="nic_bridge"/> </service>
+			<service name="Nic"> <child name="nic_router"/> </service>
 			<service name="ROM" label="config">
 				<parent label="launchpad-config"/> </service>
 			<any-service><parent/><any-child/></any-service>
@@ -486,7 +545,7 @@ if {$use_fancy_stuff} {
 	set launchpad_cfg_fd [open "bin/launchpad-config" w]
 
 	puts $launchpad_cfg_fd "<config>
-	<launcher ram_quota=\"$memory_init\" name=\"init\" caps=\"400\" >"
+	<launcher ram_quota=\"$memory_init\" name=\"init\" caps=\"500\" >"
 
 	puts $launchpad_cfg_fd {
 		<config>
@@ -507,7 +566,7 @@ if {$use_fancy_stuff} {
 				<service name="VM"/>
 			</parent-provides>
 
-			<start name="seoul" priority="-1" caps="200">
+			<start name="seoul" caps="400">
 				<binary name="seoul"/>
 				<resource name="RAM" quantum="256M"/>
 				<route>
@@ -538,13 +597,11 @@ set boot_modules {
 }
 
 lappend_if $use_block_vdi     boot_modules vdi_block
-lappend_if [expr !$use_usb]   boot_modules ps2_drv
-lappend_if $use_usb           boot_modules usb_drv
 lappend_if $use_vfs_block     boot_modules vfs_block
 lappend_if $use_vfs_block     boot_modules vfs.lib.so
 lappend_if $use_drv_ahci      boot_modules ahci_drv
 lappend_if $use_nic_session   boot_modules ipxe_nic_drv
-lappend_if $use_nic_bridge    boot_modules nic_bridge
+lappend_if $use_nic_session   boot_modules nic_router
 lappend_if $use_framebuffer   boot_modules vesa_fb_drv
 
 lappend_if $use_fancy_stuff   boot_modules status_bar
@@ -587,10 +644,6 @@ if {$use_multiboot} {
 	if {$guest_os_binary_missing} { exit 1 }
 
 	append boot_modules $guest_os_binaries
-}
-
-if {$use_usb} {
-	append qemu_args " -usb -usbdevice mouse -usbdevice keyboard "
 }
 
 append_platform_drv_boot_modules

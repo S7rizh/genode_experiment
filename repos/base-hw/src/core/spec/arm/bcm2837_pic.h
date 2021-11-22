@@ -16,7 +16,12 @@
 
 #include <util/mmio.h>
 
-namespace Board { class Pic; }
+namespace Board {
+
+	class Global_interrupt_controller { };
+	class Pic;
+}
+
 
 class Board::Pic : Genode::Mmio
 {
@@ -28,7 +33,6 @@ class Board::Pic : Genode::Mmio
 		};
 
 	private:
-
 
 		template <unsigned CPU_NUM>
 		struct Core_timer_irq_control : Register<0x40+CPU_NUM*0x4, 32>
@@ -54,7 +58,7 @@ class Board::Pic : Genode::Mmio
 
 	public:
 
-		Pic();
+		Pic(Global_interrupt_controller &);
 
 		bool take_request(unsigned &irq);
 		void finish_request() { }

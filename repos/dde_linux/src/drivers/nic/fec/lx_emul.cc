@@ -21,26 +21,25 @@
 #include <base/snprintf.h>
 #include <gpio_session/connection.h>
 #include <irq_session/client.h>
-#include <platform_session/connection.h>
-#include <platform_device/client.h>
+#include <platform_session/device.h>
 
-#include <component.h>
+#include <uplink_client.h>
 #include <lx_emul.h>
 
 #if DEBUG
 #include <os/backtrace.h>
 #endif
 
-#include <lx_emul/impl/kernel.h>
-#include <lx_emul/impl/delay.h>
-#include <lx_emul/impl/slab.h>
-#include <lx_emul/impl/work.h>
-#include <lx_emul/impl/spinlock.h>
-#include <lx_emul/impl/mutex.h>
-#include <lx_emul/impl/sched.h>
-#include <lx_emul/impl/timer.h>
-#include <lx_emul/impl/completion.h>
-#include <lx_kit/irq.h>
+#include <legacy/lx_emul/impl/kernel.h>
+#include <legacy/lx_emul/impl/delay.h>
+#include <legacy/lx_emul/impl/slab.h>
+#include <legacy/lx_emul/impl/work.h>
+#include <legacy/lx_emul/impl/spinlock.h>
+#include <legacy/lx_emul/impl/mutex.h>
+#include <legacy/lx_emul/impl/sched.h>
+#include <legacy/lx_emul/impl/timer.h>
+#include <legacy/lx_emul/impl/completion.h>
+#include <legacy/lx_kit/irq.h>
 
 extern "C" { struct page; }
 
@@ -104,6 +103,37 @@ struct Device : Genode::List<Device>::Element
 	{
 		static Genode::List<Device> _list;
 		return &_list;
+	}
+};
+
+
+namespace Platform {
+
+	struct Device_client;
+
+	using Device_capability = Genode::Capability<Platform::Device_interface>;
+}
+
+
+struct Platform::Device_client : Rpc_client<Device_interface>
+{
+	Device_client(Device_capability cap)
+	: Rpc_client<Device_interface>(cap) { }
+
+	Irq_session_capability irq(unsigned id = 0)
+	{
+		return call<Rpc_irq>(id);
+	}
+
+	Io_mem_session_capability io_mem(unsigned id, Range &range, Cache cache)
+	{
+		return call<Rpc_io_mem>(id, range, cache);
+	}
+
+	Dataspace_capability io_mem_dataspace(unsigned id = 0)
+	{
+		Range range { };
+		return Io_mem_session_client(io_mem(id, range, UNCACHED)).dataspace();
 	}
 };
 
@@ -249,9 +279,8 @@ struct Fec : public Genode::List<Fec>::Element
 			{
 				using namespace Genode;
 
+				phy_driver = xml.attribute_value("type", String());
 				xml.for_each_sub_node("property", [&] (Xml_node node) {
-					if (String("compatible") == node.attribute_value("name", String())) {
-						phy_driver = node.attribute_value("value", String()); }
 					if (String("mdio_bus") == node.attribute_value("name", String())) {
 						mdio_bus = node.attribute_value("value", String()); }
 					if (String("mdio_reg") == node.attribute_value("name", String())) {
@@ -279,7 +308,7 @@ struct Fec : public Genode::List<Fec>::Element
 	int                               tx_queues { 1 };
 	int                               rx_queues { 1 };
 	struct net_device *               net_dev { nullptr };
-	Session_component *               session { nullptr };
+	Linux_network_session_base       *session { nullptr };
 	Genode::Attached_dataspace        io_ds   { Lx_kit::env().env().rm(),
 	                                            device.io_mem_dataspace() };
 	Genode::Constructible<Mdio>       mdio;
@@ -292,9 +321,8 @@ struct Fec : public Genode::List<Fec>::Element
 	{
 		using namespace Genode;
 
+		type = xml.attribute_value("type", String());
 		xml.for_each_sub_node("property", [&] (Xml_node node) {
-			if (String("compatible") == node.attribute_value("name", String())) {
-				type = node.attribute_value("value", String()); }
 			if (String("mii") == node.attribute_value("name", String())) {
 				phy_mode = node.attribute_value("value", String()); }
 			if (String("phy") == node.attribute_value("name", String())) {
@@ -319,8 +347,10 @@ static Genode::List<Fec> & fec_devices()
 }
 
 
-net_device * Session_component::_register_session_component(Session_component & s,
-                                                            Genode::Session_label policy)
+net_device *
+Linux_network_session_base::
+_register_session(Linux_network_session_base &session,
+                  Genode::Session_label       policy)
 {
 	unsigned number = 0;
 	for (Fec * f = fec_devices().first(); f; f = f->next()) { number++; }
@@ -335,17 +365,17 @@ net_device * Session_component::_register_session_component(Session_component & 
 		/* Session already in use? */
 		if (f->session) continue;
 
-		f->session = &s;
+		f->session = &session;
 		return f->net_dev;
 	}
 	return nullptr;
 }
 
 
-#include <lx_emul/extern_c_begin.h>
+#include <legacy/lx_emul/extern_c_begin.h>
 #include <linux/phy.h>
 #include <linux/timecounter.h>
-#include <lx_emul/extern_c_end.h>
+#include <legacy/lx_emul/extern_c_end.h>
 
 extern "C" {
 
@@ -374,14 +404,11 @@ int platform_driver_register(struct platform_driver * drv)
 		xml.for_each_sub_node("device", [&] (Xml_node node) {
 
 			String name = node.attribute_value("name", String());
-			String compatible;
-			node.for_each_sub_node("property", [&] (Xml_node node) {
-				if (String("compatible") == node.attribute_value("name", String())) {
-					compatible = node.attribute_value("value", String()); }});
+			String type = node.attribute_value("type", String());
 
-			if (compatible == "fsl,imx6q-fec"  ||
-			    compatible == "fsl,imx6sx-fec" ||
-			    compatible == "fsl,imx25-fec") {
+			if (type == "fsl,imx6q-fec"  ||
+			    type == "fsl,imx6sx-fec" ||
+			    type == "fsl,imx25-fec") {
 				Fec * f = new (Lx_kit::env().heap())
 					Fec(name, node, platform_connection().acquire_device(name.string()));
 
@@ -394,7 +421,7 @@ int platform_driver_register(struct platform_driver * drv)
 				return;
 			}
 
-			if (compatible == "ethernet-phy-ieee802.3-c22") {
+			if (type == "ethernet-phy-ieee802.3-c22") {
 				Fec::Mdio::Phy * p = new (Lx_kit::env().heap())
 					Fec::Mdio::Phy(name, node, platform_connection().acquire_device(name.string()));
 				for (Fec * f = fec_devices().first(); f; f = f->next()) {

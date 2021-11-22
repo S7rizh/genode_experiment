@@ -7,7 +7,7 @@
 
 /*
  * Copyright (C) 2006-2013 Oracle Corporation
- * Copyright (C) 2013-2019 Genode Labs GmbH
+ * Copyright (C) 2013-2021 Genode Labs GmbH
  *
  * This file is distributed under the terms of the GNU General Public License
  * version 2.
@@ -381,7 +381,7 @@ int SUPR3CallVMMR0Ex(PVMR0 pVMR0, VMCPUID idCpu, unsigned uOperation,
 		if (ns_diff > RT_NS_1SEC)
 			warning(" more than 1 sec vcpu halt ", ns_diff, " ns");
 
-		Vcpu_handler *vcpu_handler = lookup_vcpu_handler(idCpu);
+		::Vcpu_handler *vcpu_handler = lookup_vcpu_handler(idCpu);
 		Assert(vcpu_handler);
 		vcpu_handler->halt(ns_diff);
 
@@ -793,8 +793,8 @@ bool create_emt_vcpu(pthread_t * thread, ::size_t stack_size,
 
 	vcpu_handler_list().insert(vcpu_handler);
 
-	Libc::pthread_create(thread, start_routine, arg,
-	                     stack_size, name, cpu_connection, location);
+	Libc::pthread_create_from_session(thread, start_routine, arg,
+	                                  stack_size, name, cpu_connection, location);
 
 	return true;
 }
@@ -868,6 +868,8 @@ class Pgm_guard
 };
 
 #include "PGMInline.h"
+
+Genode::Vm_connection::Exit_config const Vcpu_handler::_exit_config { /* ... */ };
 
 int Vcpu_handler::map_memory(Genode::Vm_connection &vm_session,
                              RTGCPHYS const GCPhys, RTGCUINT vbox_fault_reason)

@@ -22,7 +22,7 @@
 j  _kernel_entry
 
 .p2align 8
-
+.global _kernel_entry
 _kernel_entry:
 
 	# client context
@@ -49,7 +49,7 @@ _kernel_entry:
 	la x30, kernel_stack_size
 	ld x30, (x30)
 	add sp, x29, x30
-	la x30, kernel
+	la x30, _ZN6Kernel24main_handle_kernel_entryEv
 
 	jalr x30
 
@@ -63,4 +63,14 @@ _kernel_entry:
 	.global idle_thread_main
 	idle_thread_main:
 	wfi
+
+	/*
+	 * MIG-V errata:
+	 * "Place 7 NOPs after WFI to ensure proper pipeline propagation"
+	 * Otherwise wfi will exit without an interrupt.
+	 */
+	.rept 7
+		nop
+	.endr
+
 	j idle_thread_main

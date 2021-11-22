@@ -18,6 +18,7 @@
 
 namespace Hw { struct Riscv_cpu; }
 
+
 struct Hw::Riscv_cpu
 {
 	/**************************
@@ -26,20 +27,30 @@ struct Hw::Riscv_cpu
 
 	/* Supervisor-mode status Register */
 	RISCV_SUPERVISOR_REGISTER(Sstatus, sstatus,
+		struct Sie : Bitfield<1,1>   { }; /* supervisor interrupt enable */
 		struct Spp : Bitfield<8,1>  { }; /* prior privilege level */
 	);
 
 	/* Supervisor Trap Vector Base Address Register */
 	RISCV_SUPERVISOR_REGISTER(Stvec, stvec);
 
-	/* Supervisor Bad Address Register */
-	RISCV_SUPERVISOR_REGISTER(Sbadaddr, sbadaddr);
+	/* Supervisor Trap Value (replaces Sbadaddr in ISA 1.10) */
+	RISCV_SUPERVISOR_REGISTER(Stval, stval);
 
-	/* Supervisor Page-Table Base Register */
-	RISCV_SUPERVISOR_REGISTER(Sptbr, sptbr,
-		struct Ppn  : Bitfield<0, 38> { };
-		struct Asid : Bitfield<38, 26> { };
+	/* Supervisor address translation an protection (replaces sptbr in ISA 1.10) */
+	RISCV_SUPERVISOR_REGISTER(Satp, satp,
+		struct Ppn  : Bitfield<0, 44> { };
+		struct Asid : Bitfield<44,16> { };
+		struct Mode : Bitfield<60, 4> { };
 	);
+
+	struct Sie
+	{
+		Sie(Genode::addr_t bits)
+		{
+			asm volatile ("csrs sie, %0" : : "r"(bits));
+		}
+	};
 };
 
 #endif /* _SRC__LIB__HW__SPEC__RISCV__CPU_H_ */

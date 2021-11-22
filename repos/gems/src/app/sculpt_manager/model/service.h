@@ -25,9 +25,9 @@ struct Sculpt::Service
 	typedef String<32> Info;
 
 	enum class Type {
-		AUDIO_IN, AUDIO_OUT, BLOCK, FILE_SYSTEM, NIC, GUI,
-		RM, IO_MEM, IO_PORT, IRQ, REPORT, ROM, TERMINAL, TRACE,
-		USB, RTC, PLATFORM, VM, UNDEFINED };
+		AUDIO_IN, AUDIO_OUT, BLOCK, EVENT, CAPTURE, FILE_SYSTEM, NIC, GUI, GPU,
+		RM, IO_MEM, IO_PORT, IRQ, REPORT, ROM, TERMINAL, TRACE, USB, RTC,
+		PLATFORM, VM, PD, UNDEFINED };
 
 	enum class Match_label { EXACT, LAST };
 
@@ -46,9 +46,12 @@ struct Sculpt::Service
 		case Type::AUDIO_IN:    return "Audio_in";
 		case Type::AUDIO_OUT:   return "Audio_out";
 		case Type::BLOCK:       return "Block";
+		case Type::EVENT:       return "Event";
+		case Type::CAPTURE:     return "Capture";
 		case Type::FILE_SYSTEM: return "File_system";
 		case Type::NIC:         return "Nic";
 		case Type::GUI:         return "Gui";
+		case Type::GPU:         return "Gpu";
 		case Type::RM:          return "RM";
 		case Type::IO_MEM:      return "IO_MEM";
 		case Type::IO_PORT:     return "IO_PORT";
@@ -61,6 +64,7 @@ struct Sculpt::Service
 		case Type::RTC:         return "Rtc";
 		case Type::PLATFORM:    return "Platform";
 		case Type::VM:          return "VM";
+		case Type::PD:          return "PD";
 		case Type::UNDEFINED:   break;
 		}
 		return "undefined";

@@ -53,10 +53,11 @@ Linux_dataspace::Filename Dataspace_component::_file_name(const char *args)
 
 Genode::size_t Dataspace_component::_file_size()
 {
-	struct stat64 s;
-	if (lx_stat(_fname.buf, &s) < 0) throw Service_denied();
+	uint64_t size = 0;
+	if (lx_stat_size(_fname.buf, &size) < 0)
+		throw Service_denied();
 
-	return s.st_size;
+	return size;
 }
 
 
@@ -72,7 +73,7 @@ Dataspace_component::Dataspace_component(const char *args)
 
 
 Dataspace_component::Dataspace_component(size_t size, addr_t, addr_t phys_addr,
-        Cache_attribute, bool writable, Dataspace_owner *_owner)
+                                         Cache, bool writable, Dataspace_owner *_owner)
 :
 	_size(size), _addr(phys_addr), _cap(), _writable(writable), _owner(_owner)
 {

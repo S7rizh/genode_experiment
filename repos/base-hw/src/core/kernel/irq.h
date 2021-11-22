@@ -19,14 +19,17 @@
 #include <irq_session/irq_session.h>
 #include <util/avl_tree.h>
 
-/* base-internal includes */
-#include <base/internal/unmanaged_singleton.h>
-
 /* core includes */
 #include <kernel/signal_receiver.h>
 
-namespace Kernel
-{
+namespace Board {
+
+	class Pic;
+}
+
+
+namespace Kernel {
+
 	/**
 	 * Kernel back-end interface of an interrupt
 	 */
@@ -38,8 +41,9 @@ namespace Kernel
 	class User_irq;
 }
 
-namespace Genode
-{
+
+namespace Genode {
+
 	/**
 	 * Core front-end of a user interrupt
 	 */
@@ -66,8 +70,9 @@ class Kernel::Irq : Genode::Avl_node<Irq>
 
 	protected:
 
-		unsigned _irq_nr; /* kernel name of the interrupt */
-		Pool    &_pool;
+		unsigned    _irq_nr; /* kernel name of the interrupt */
+		Pool       &_irq_pool;
+		Board::Pic &_pic;
 
 	public:
 
@@ -77,10 +82,18 @@ class Kernel::Irq : Genode::Avl_node<Irq>
 		 * \param irq   interrupt number
 		 * \param pool  pool this interrupt shall belong to
 		 */
-		Irq(unsigned const irq, Pool &pool)
-		: _irq_nr(irq), _pool(pool) { _pool.insert(this); }
+		Irq(unsigned const  irq,
+		    Pool           &irq_pool,
+		    Board::Pic     &pic)
+		:
+			_irq_nr   { irq },
+			_irq_pool { irq_pool },
+			_pic      { pic }
+		{
+			_irq_pool.insert(this);
+		}
 
-		virtual ~Irq() { _pool.remove(this); }
+		virtual ~Irq() { _irq_pool.remove(this); }
 
 		/**
 		 * Handle occurence of the interrupt
@@ -126,20 +139,17 @@ class Kernel::User_irq : public Kernel::Irq
 		Kernel::Object  _kernel_object { *this };
 		Signal_context &_context;
 
-		/**
-		 * Get map that provides all user interrupts by their kernel names
-		 */
-		static Irq::Pool &_pool();
-
 	public:
 
 		/**
 		 * Construct object that signals interrupt 'irq' via signal 'context'
 		 */
-		User_irq(unsigned const                irq,
-		         Genode::Irq_session::Trigger  trigger,
-		         Genode::Irq_session::Polarity polarity,
-		         Signal_context              & context);
+		User_irq(unsigned                const  irq,
+		         Genode::Irq_session::Trigger   trigger,
+		         Genode::Irq_session::Polarity  polarity,
+		         Signal_context                &context,
+		         Board::Pic                    &pic,
+		         Irq::Pool                     &user_irq_pool);
 
 		/**
 		 * Destructor
@@ -160,8 +170,8 @@ class Kernel::User_irq : public Kernel::Irq
 		/**
 		 * Handle occurence of interrupt 'irq'
 		 */
-		static User_irq * object(unsigned const irq) {
-			return dynamic_cast<User_irq*>(_pool().object(irq)); }
+		static User_irq * object(Irq::Pool &user_irq_pool, unsigned const irq) {
+			return dynamic_cast<User_irq*>(user_irq_pool.object(irq)); }
 
 		/**
 		 * Syscall to create user irq object

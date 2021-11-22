@@ -14,19 +14,33 @@
 #ifndef _CORE__SPEC__ARM_V8__CPU_H_
 #define _CORE__SPEC__ARM_V8__CPU_H_
 
-/* Genode includes */
+/* base includes */
 #include <util/register.h>
 #include <cpu/cpu_state.h>
+
+/* base internal includes */
 #include <base/internal/align_at.h>
+
+/* base-hw internal includes */
 #include <hw/spec/arm_64/cpu.h>
+
+/* base-hw Core includes */
+#include <spec/arm_v8/address_space_id_allocator.h>
+#include <spec/arm_v8/translation_table.h>
 
 namespace Kernel { struct Thread_fault; }
 
+
+namespace Board { class Address_space_id_allocator; }
+
+
 namespace Genode {
+
 	struct Cpu;
 	using sizet_arithm_t = __uint128_t;
 	using uint128_t      = __uint128_t;
 }
+
 
 struct Genode::Cpu : Hw::Arm_64_cpu
 {
@@ -53,7 +67,8 @@ struct Genode::Cpu : Hw::Arm_64_cpu
 	struct alignas(16) Fpu_state
 	{
 		Genode::uint128_t q[32];
-		Genode::uint32_t  fpsr;
+		Genode::uint64_t  fpsr;
+		Genode::uint64_t  fpcr;
 	};
 
 	struct alignas(8) Context : Cpu_state
@@ -65,15 +80,23 @@ struct Genode::Cpu : Hw::Arm_64_cpu
 		Context(bool privileged);
 	};
 
-	struct Mmu_context
+	class Mmu_context
 	{
-		Ttbr::access_t ttbr;
+		private:
 
-		Mmu_context(addr_t page_table_base);
-		~Mmu_context();
+			Board::Address_space_id_allocator &_addr_space_id_alloc;
 
-		Genode::uint16_t id() {
-			return Ttbr::Asid::get(ttbr); }
+		public:
+
+			Ttbr::access_t ttbr;
+
+			Mmu_context(addr_t                             page_table_base,
+			            Board::Address_space_id_allocator &addr_space_id_alloc);
+
+			~Mmu_context();
+
+			Genode::uint16_t id() {
+				return Ttbr::Asid::get(ttbr); }
 	};
 
 	void switch_to(Context&, Mmu_context &);
@@ -92,6 +115,10 @@ struct Genode::Cpu : Hw::Arm_64_cpu
 
 	static void cache_coherent_region(addr_t const addr,
 	                                  size_t const size);
+	static void cache_clean_invalidate_data_region(addr_t const addr,
+	                                               size_t const size);
+	static void cache_invalidate_data_region(addr_t const addr,
+	                                         size_t const size);
 };
 
 #endif /* _CORE__SPEC__ARM_V8__CPU_H_ */

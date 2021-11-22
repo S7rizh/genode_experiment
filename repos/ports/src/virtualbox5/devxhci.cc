@@ -15,6 +15,8 @@
 /* Genode includes */
 #include <base/log.h>
 #include <base/attached_rom_dataspace.h>
+#include <base/registry.h>
+#include <libc/allocator.h>
 #include <util/list.h>
 
 /* qemu-usb includes */
@@ -152,7 +154,11 @@ struct Timer_queue : public Qemu::Timer_queue
 		if (TMTimerIsActive(tm_timer))
 			TMTimerStop(tm_timer);
 
-		TMTimerSetNano(tm_timer, min->timeout_abs_ns - TMTimerGetNano(tm_timer));
+		uint64_t const now = TMTimerGetNano(tm_timer);
+		if (min->timeout_abs_ns < now)
+			TMTimerSetNano(tm_timer, 0);
+		else
+			TMTimerSetNano(tm_timer, min->timeout_abs_ns - now);
 	}
 
 	void _deactivate_timer(void *qtimer)
@@ -285,7 +291,32 @@ struct Timer_queue : public Qemu::Timer_queue
 
 struct Pci_device : public Qemu::Pci_device
 {
+	Libc::Allocator _alloc { };
+
 	PPDMDEVINS pci_dev;
+
+	struct Dma_bounce_buffer
+	{
+		Genode::Allocator &_alloc;
+
+		Qemu::addr_t   const base;
+		Qemu::size_t   const size;
+		void         * const addr { _alloc.alloc(size) };
+
+		Dma_bounce_buffer(Genode::Allocator &alloc,
+		                  Qemu::addr_t       base,
+		                  Qemu::size_t       size)
+		: _alloc { alloc }, base { base }, size { size }
+		{ }
+
+		virtual ~Dma_bounce_buffer()
+		{
+			_alloc.free(addr, size);
+		}
+	};
+
+	using Reg_dma_buffer = Genode::Registered<Dma_bounce_buffer>;
+	Genode::Registry<Reg_dma_buffer> _dma_buffers { };
 
 	Pci_device(PPDMDEVINS pDevIns) : pci_dev(pDevIns) { }
 
@@ -298,20 +329,43 @@ struct Pci_device : public Qemu::Pci_device
 	int write_dma(Qemu::addr_t addr, void const *buf, Qemu::size_t size) override {
 		return PDMDevHlpPhysWrite(pci_dev, addr, buf, size); }
 
-	void *map_dma(Qemu::addr_t base, Qemu::size_t size) override
+	void *map_dma(Qemu::addr_t base, Qemu::size_t size,
+	              Qemu::Pci_device::Dma_direction dir) override
 	{
-		PGMPAGEMAPLOCK lock;
-		void * vmm_addr = nullptr;
+		Reg_dma_buffer *dma = nullptr;
 
-		int rc = PDMDevHlpPhysGCPhys2CCPtr(pci_dev, base, 0, &vmm_addr, &lock);
-		Assert(rc == VINF_SUCCESS);
+		try {
+			dma = new (_alloc) Reg_dma_buffer(_dma_buffers,
+			                                  _alloc, base, size);
+		} catch (...) {
+			return nullptr;
+		}
 
-		/* the mapping doesn't go away, so release internal lock immediately */
-		PDMDevHlpPhysReleasePageMappingLock(pci_dev, &lock);
-		return vmm_addr;
+		/* copy data for write request to bounce buffer */
+		if (dir == Qemu::Pci_device::Dma_direction::OUT) {
+			(void)PDMDevHlpPhysRead(pci_dev, base, dma->addr, size);
+		}
+
+		return dma->addr;
 	}
 
-	void unmap_dma(void *addr, Qemu::size_t size) override { }
+	void unmap_dma(void *addr, Qemu::size_t size,
+	               Qemu::Pci_device::Dma_direction dir) override
+	{
+		_dma_buffers.for_each([&] (Reg_dma_buffer &dma) {
+			if (dma.addr != addr) {
+				return;
+			}
+
+			/* copy data for read request from bounce buffer */
+			if (dir == Qemu::Pci_device::Dma_direction::IN) {
+				(void)PDMDevHlpPhysWrite(pci_dev,
+				                         dma.base, dma.addr, dma.size);
+			}
+
+			Genode::destroy(_alloc, &dma);
+		});
+	}
 };
 
 
@@ -406,7 +460,7 @@ struct Usb_ep : Genode::Entrypoint
 	void _handle_pthread_registration()
 	{
 		Genode::Thread *myself = Genode::Thread::myself();
-		if (!myself || Libc::pthread_create(&_pthread, *myself)) {
+		if (!myself || Libc::pthread_create_from_thread(&_pthread, *myself, &myself)) {
 			Genode::error("USB passthough will not work - thread for "
 			              "pthread registration invalid");
 		}
@@ -438,14 +492,18 @@ static DECLCALLBACK(int) xhciR3Construct(PPDMDEVINS pDevIns, int iInstance, PCFG
 
 	int rc = PDMDevHlpTMTimerCreate(pDevIns, TMCLOCK_VIRTUAL, Timer_queue::tm_timer_cb,
 	                                pThis, TMTIMER_FLAGS_NO_CRIT_SECT,
-	                                "NEC-XHCI Timer", &pThis->controller_timer);
+	                                "XHCI Timer", &pThis->controller_timer);
 
 	static Timer_queue timer_queue(pThis->controller_timer);
 	pThis->timer_queue = &timer_queue;
 	static Pci_device pci_device(pDevIns);
 
+	Genode::Attached_rom_dataspace config(genode_env(), "config");
+
 	pThis->ctl = Qemu::usb_init(timer_queue, pci_device, *pThis->usb_ep,
-	                            vmm_heap(), genode_env());
+	                            vmm_heap(), genode_env(), config.xml());
+
+	Qemu::Controller::Info const ctl_info = pThis->ctl->info();
 
 	/*
 	 * Init instance data.
@@ -454,11 +512,11 @@ static DECLCALLBACK(int) xhciR3Construct(PPDMDEVINS pDevIns, int iInstance, PCFG
 	pThis->pDevInsR0 = PDMDEVINS_2_R0PTR(pDevIns);
 	pThis->pDevInsRC = PDMDEVINS_2_RCPTR(pDevIns);
 
-	PCIDevSetVendorId      (&pThis->PciDev, 0x1033); /* PCI_VENDOR_ID_NEC */
-	PCIDevSetDeviceId      (&pThis->PciDev, 0x0194); /* PCI_DEVICE_ID_NEC_UPD720200 */
+	PCIDevSetVendorId      (&pThis->PciDev, ctl_info.vendor_id);
+	PCIDevSetDeviceId      (&pThis->PciDev, ctl_info.product_id);
+	PCIDevSetClassBase     (&pThis->PciDev, 0x0c);   /* PCI serial */
+	PCIDevSetClassSub      (&pThis->PciDev, 0x03);   /* USB */
 	PCIDevSetClassProg     (&pThis->PciDev, 0x30);   /* xHCI */
-	PCIDevSetClassSub      (&pThis->PciDev, 0x03);
-	PCIDevSetClassBase     (&pThis->PciDev, 0x0c);
 	PCIDevSetInterruptPin  (&pThis->PciDev, 0x01);
 	PCIDevSetByte          (&pThis->PciDev, 0x60, 0x30); /* Serial Bus Release Number Register */
 #ifdef VBOX_WITH_MSI_DEVICES

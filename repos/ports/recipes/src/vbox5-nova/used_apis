@@ -2,6 +2,7 @@ audio_in_session
 audio_out_session
 base
 base-nova
+capture_session
 framebuffer_session
 input_session
 libc
@@ -18,3 +19,4 @@ usb_session
 vfs
 nitpicker_gfx
 blit
+libyuv

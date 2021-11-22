@@ -37,6 +37,7 @@ void append_param_req_list(Dhcp_options &dhcp_opts)
 		data.append_param_req<Dhcp_packet::Server_ipv4>();
 		data.append_param_req<Dhcp_packet::Ip_lease_time>();
 		data.append_param_req<Dhcp_packet::Dns_server_ipv4>();
+		data.append_param_req<Dhcp_packet::Domain_name>();
 		data.append_param_req<Dhcp_packet::Subnet_mask>();
 		data.append_param_req<Dhcp_packet::Router_ipv4>();
 	});
@@ -53,11 +54,10 @@ Configuration &Dhcp_client::_config() { return _domain().config(); };
 Domain &Dhcp_client::_domain() { return _interface.domain(); }
 
 
-Dhcp_client::Dhcp_client(Genode::Allocator &alloc,
-                         Timer::Connection &timer,
+Dhcp_client::Dhcp_client(Timer::Connection &timer,
                          Interface         &interface)
 :
-	_alloc(alloc), _interface(interface),
+	_interface(interface),
 	_timeout(timer, *this, &Dhcp_client::_handle_timeout)
 { }
 
@@ -73,7 +73,7 @@ void Dhcp_client::discover()
 void Dhcp_client::_rerequest(State next_state)
 {
 	_set_state(next_state, _rerequest_timeout(2));
-	Ipv4_address const client_ip = _domain().ip_config().interface.address;
+	Ipv4_address const client_ip = _domain().ip_config().interface().address;
 	_send(Message_type::REQUEST, client_ip, Ipv4_address(), client_ip);
 }
 

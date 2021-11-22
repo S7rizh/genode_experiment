@@ -74,7 +74,9 @@ class Sculpt::Runtime_config
 				                   || (service == "IO_MEM")
 				                   || (service == "Rtc")
 				                   || (service == "IRQ")
-				                   || (service == "TRACE");
+				                   || (service == "TRACE")
+				                   || (service == "Event")
+				                   || (service == "Capture");
 				if (hardware) {
 					result = "hardware";
 					return;
@@ -327,6 +329,11 @@ class Sculpt::Runtime_config
 				_backdrop  { _r, Type::GUI,         "desktop background",             "backdrop" },
 				_lockscreen{ _r, Type::GUI,         "desktop lock screen",            "lock_screen" },
 				_nitpicker { _r, Type::GUI,         "system GUI server" },
+				_gpu       { _r, Type::GPU,         "GPU" },
+				_lz_event  { _r, Type::EVENT,       "management GUI events",          "leitzentrale" },
+				_event     { _r, Type::EVENT,       "system input events",            "global" },
+				_lz_capture{ _r, Type::CAPTURE,     "management GUI",                 "leitzentrale" },
+				_capture   { _r, Type::CAPTURE,     "system GUI",                     "global" },
 				_config_fs { _r, Type::FILE_SYSTEM, "writeable system configuration", "config" },
 				_report_fs { _r, Type::FILE_SYSTEM, "read-only system reports",       "report" },
 				_capslock  { _r, Type::ROM,         "global capslock state",          "capslock" },
@@ -342,7 +349,6 @@ class Sculpt::Runtime_config
 				_io_mem    { _r, Type::IO_MEM,      "raw hardware access" },
 				_io_port   { _r, Type::IO_PORT,     "raw hardware access" },
 				_irq       { _r, Type::IRQ,         "raw hardware access" },
-				_rtc       { _r, Type::RTC,         "system clock" },
 				_block     { _r, Type::BLOCK,       "direct block-device access" },
 				_usb       { _r, Type::USB,         "direct USB-device access" },
 				_pci_wifi  { _r, Type::PLATFORM,    "wifi hardware",    "wifi" },
@@ -350,7 +356,8 @@ class Sculpt::Runtime_config
 				_pci_audio { _r, Type::PLATFORM,    "audio hardware",   "audio" },
 				_pci_acpi  { _r, Type::PLATFORM,    "ACPI",             "acpica" },
 				_trace     { _r, Type::TRACE,       "system-global tracing" },
-				_vm        { _r, Type::VM,          "virtualization hardware" };
+				_vm        { _r, Type::VM,          "virtualization hardware" },
+				_pd        { _r, Type::PD,          "system PD service" };
 
 			template <typename FN>
 			void for_each(FN const &fn) const { _r.for_each(fn); }

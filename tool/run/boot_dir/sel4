@@ -1,9 +1,9 @@
 proc binary_name_ld_lib_so { } { return "ld-sel4.lib.so" }
-proc binary_name_core_o    { } { return "core-sel4.o" }
+proc binary_name_core_a    { } { return "core-sel4.a" }
 proc binary_name_timer     { } {
-	if {[have_spec imx6]}        { return "imx6_timer_drv" }
-	if {[have_spec imx7d_sabre]} { return "imx7_timer_drv" }
-	if {[have_spec x86]}         { return "pit_timer_drv"  }
+	if {[have_board imx6q_sabrelite]} { return "imx6_timer_drv" }
+	if {[have_board imx7d_sabre]}     { return "imx7_timer_drv" }
+	if {[have_board pc]}              { return "pit_timer_drv"  }
 	puts "unknown platform - no timer driver"
 	exit -1
 }
@@ -39,7 +39,7 @@ proc run_boot_dir {binaries} {
 	if {[llength $targets]} { build $targets }
 
 	if {$kernel_arg != ""} {
-		file copy -force [pwd]/bin/sel4-[board] [run_dir]/genode/sel4
+		copy_file [pwd]/bin/sel4-[board] [run_dir]/genode/sel4
 	}
 
 	build_core_image $binaries
@@ -49,7 +49,7 @@ proc run_boot_dir {binaries} {
 	# we can remove [run_dir]/genode after the core image has been built.
 	#
 	exec mkdir -p [run_dir]/boot
-	file copy -force [run_dir]/genode/sel4 [run_dir]/boot/sel4
+	copy_file [run_dir]/genode/sel4 [run_dir]/boot/sel4
 	remove_genode_dir
 
 	exec mv [run_dir]/image.elf [run_dir]/boot/image.elf
@@ -98,9 +98,9 @@ proc run_boot_dir {binaries} {
 	# Use seL4 elfloader tool to generate bootable image on ARM
 	#
 	if {[have_spec arm]} {
-		if {[have_spec imx6]} {
+		if {[have_board imx6q_sabrelite]} {
 			set ::env(PLAT) imx6
-		} elseif {[have_spec imx7d_sabre]} {
+		} elseif {[have_board imx7d_sabre]} {
 			set ::env(PLAT) imx7
 		} else {
 			puts "abort - unknown ARM board"
@@ -119,12 +119,12 @@ proc run_boot_dir {binaries} {
 
 	run_image [run_dir]/boot/image.elf
 
-	# set symbolic link to image.elf file in TFTP directory for PXE boot
+	# install image.elf file in TFTP directory for PXE boot
 	if {[have_spec arm] && [have_include "load/tftp"]} {
-		exec ln -sf [pwd]/[run_dir]/boot/image.elf [load_tftp_base_dir][load_tftp_offset_dir]
+		exec {*}[load_tftp_inst_cmd] [pwd]/[run_dir]/boot/image.elf [load_tftp_base_dir][load_tftp_offset_dir]
 
 		if {[have_include "image/uboot"]} {
-			exec ln -sf [pwd]/[run_dir]/uImage [load_tftp_base_dir][load_tftp_offset_dir]
+			exec {*}[load_tftp_inst_cmd] [pwd]/[run_dir]/uImage [load_tftp_base_dir][load_tftp_offset_dir]
 		}
 	}
 
@@ -159,9 +159,9 @@ proc run_boot_dir {binaries} {
 #
 proc base_src { } {
 
-	if {[have_spec x86]}             { return base-sel4-x86 }
-	if {[have_spec imx6q_sabrelite]} { return base-sel4-imx6q_sabrelite }
-	if {[have_spec imx7d_sabre]}     { return base-sel4-imx7d_sabre }
+	if {[have_spec x86]}              { return base-sel4-x86 }
+	if {[have_board imx6q_sabrelite]} { return base-sel4-imx6q_sabrelite }
+	if {[have_board imx7d_sabre]}     { return base-sel4-imx7d_sabre }
 
 	global specs
 

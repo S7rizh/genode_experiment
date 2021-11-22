@@ -16,8 +16,7 @@
 #include <base/attached_dataspace.h>
 #include <base/component.h>
 #include <base/log.h>
-#include <platform_session/connection.h>
-#include <platform_device/client.h>
+#include <platform_session/device.h>
 #include <timer_session/connection.h>
 #include <capture_session/connection.h>
 #include <blit/painter.h>
@@ -84,17 +83,17 @@ struct Pl11x_driver::Main
 	 * Driver
 	 */
 
-	Platform::Connection     _platform   { _env };
-	Platform::Device_client  _pl11x_dev  {
-		_platform.device_by_property("compatible", "arm,pl111") };
-	Platform::Device_client  _sp810_dev  {
-		_platform.device_by_property("compatible", "arm,sp810") };
-	Attached_dataspace       _lcd_io_mem { _env.rm(),
-	                                       _pl11x_dev.io_mem_dataspace() };
-	Attached_dataspace       _sys_mem    { _env.rm(),
-	                                       _sp810_dev.io_mem_dataspace() };
+	using Type = Platform::Device::Type;
+
+	Platform::Connection     _platform  { _env };
+	Platform::Device         _pl11x_dev { _platform, Type { "arm,pl111" } };
+	Platform::Device         _sp810_dev { _platform, Type { "arm,sp810" } };
+	Platform::Device::Mmio  _lcd_io_mem { _pl11x_dev };
+	Platform::Device::Mmio  _sys_mem    { _sp810_dev };
+
 	Ram_dataspace_capability _fb_ds_cap  {
-		_platform.alloc_dma_buffer(FRAMEBUFFER_SIZE) };
+		_platform.alloc_dma_buffer(FRAMEBUFFER_SIZE, UNCACHED) };
+
 	Attached_dataspace       _fb_ds      { _env.rm(), _fb_ds_cap };
 
 	void _init_device();
@@ -198,7 +197,7 @@ void Pl11x_driver::Main::_init_device()
 	reg_write(PL11X_REG_TIMING3, tim3);
 
 	/* set framebuffer address and ctrl register */
-	addr_t const fb_dma_base = (addr_t)_platform.bus_addr_dma_buffer(_fb_ds_cap);
+	addr_t const fb_dma_base = (addr_t)_platform.dma_addr(_fb_ds_cap);
 	reg_write(PL11X_REG_UPBASE, fb_dma_base);
 	reg_write(PL11X_REG_LPBASE, 0);
 	reg_write(PL11X_REG_IMSC,   0);

@@ -107,7 +107,7 @@ class Net::Domain : public Domain_base,
 		unsigned long                         _interface_cnt        { 0 };
 		Pointer<Dhcp_server>                  _dhcp_server          { };
 		Genode::Reconstructible<Ipv4_config>  _ip_config;
-		bool                            const _ip_config_dynamic    { !ip_config().valid };
+		bool                            const _ip_config_dynamic    { !ip_config().valid() };
 		List<Domain>                          _ip_config_dependents { };
 		Arp_cache                             _arp_cache            { *this };
 		Arp_waiter_list                       _foreign_arp_waiters  { };
@@ -126,6 +126,7 @@ class Net::Domain : public Domain_base,
 		Domain_link_stats                     _icmp_stats           { };
 		Domain_object_stats                   _arp_stats            { };
 		Domain_object_stats                   _dhcp_stats           { };
+		unsigned long                         _dropped_fragm_ipv4   { 0 };
 
 		void _read_forward_rules(Genode::Cstring  const &protocol,
 		                         Domain_tree            &domains,
@@ -194,6 +195,8 @@ class Net::Domain : public Domain_base,
 		void raise_tx_bytes(Genode::size_t bytes) { _tx_bytes += bytes; }
 
 		void report(Genode::Xml_generator &xml);
+
+		void add_dropped_fragm_ipv4(unsigned long dropped_fragm_ipv4);
 
 
 		/*********

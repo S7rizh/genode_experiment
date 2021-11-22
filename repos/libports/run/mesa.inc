@@ -1,33 +1,44 @@
 
-if {[have_spec linux] && $use_i965} {
-	puts "i965 driver not supported on Linux."
+if {[have_spec linux] && ($use_iris || $use_etnaviv)} {
+	puts "Hardware driver not supported on Linux."
 	exit 1
 }
 
-if {[have_include power_on/qemu] && $use_i965} {
-	puts "i965 driver not supported in Qemu."
+if {[have_include power_on/qemu] && ($use_iris || $use_etnaviv)} {
+	puts "Hardware driver not supported in Qemu."
 	exit 1
 }
 
 create_boot_directory
-import_from_depot [depot_user]/src/[base_src] \
-                  [depot_user]/pkg/[drivers_interactive_pkg] \
-                  [depot_user]/src/nitpicker \
-                  [depot_user]/src/demo \
-                  [depot_user]/src/init
 
+set imports { }
+
+if {$use_etnaviv} {
+lappend imports [depot_user]/pkg/drivers_managed-[board]
+} else {
+lappend imports [depot_user]/pkg/drivers_interactive-[board]
+}
+
+lappend imports [depot_user]/src/nitpicker
+lappend imports [depot_user]/src/report_rom
+
+import_from_depot $imports
 
 set build_components {
 	drivers/gpu/intel
-	lib/mesa/swrast
+	lib/mesa/softpipe
+	core init timer
 }
 
-lappend_if $use_i965 build_components lib/mesa/i965
-lappend build_components $demo_component 
+lappend_if $use_iris    build_components lib/mesa/iris
+lappend_if $use_etnaviv build_components lib/mesa/etnaviv
+lappend_if $use_etnaviv build_components drivers/gpu/etnaviv
+lappend build_components $demo_component
+
 build $build_components
 
 set config {
-<config prio_levels="2">
+<config prio_levels="2" verbose="yes">
 	<parent-provides>
 		<service name="CPU"/>
 		<service name="IRQ"/>
@@ -48,14 +59,25 @@ set config {
 		<provides><service name="Timer"/></provides>
 	</start>
 
-	<start name="drivers" caps="1500" managing_system="yes">
-		<resource name="RAM" quantum="64M"/>
+	<start name="report_rom">
+		<resource name="RAM" quantum="1M"/>
+		<provides> <service name="Report"/> <service name="ROM"/> </provides>
+		<config verbose="no"/>
+		<route>
+			<any-service> <parent/> </any-service>
+		</route>
+	</start>
+
+	<start name="drivers" caps="2500" managing_system="yes">
+		<resource name="RAM" quantum="128M"/>
 		<binary name="init"/>
+		<provides> <service name="Platform"/> </provides>
 		<route>
 			<service name="ROM" label="config"> <parent label="drivers.config"/> </service>
 			<service name="Timer">   <child name="timer"/> </service>
 			<service name="Capture"> <child name="nitpicker"/> </service>
 			<service name="Event">   <child name="nitpicker"/> </service>
+			<service name="Report">  <child name="report_rom"/> </service>
 			<any-service> <parent/> </any-service>
 		</route>
 	</start>
@@ -78,71 +100,50 @@ set config {
 		<resource name="RAM" quantum="1M"/>
 	</start>}
 
-set backend_library egl_swrast.lib.so
-if {$use_i965} {
-set backend_library egl_i965.lib.so
+set backend_library mesa_gpu-softpipe.lib.so
+if {$use_iris}    { set backend_library mesa_gpu-iris.lib.so }
+if {$use_etnaviv} { set backend_library mesa_gpu-etnaviv.lib.so }
+
+append config "
+	<start name=\"$demo_binary\" caps=\"$demo_caps\">
+		<resource name=\"RAM\" quantum=\"$demo_ram_quota\"/>"
+
+append config $demo_config
+
+append config "
+		<route>
+			<service name=\"ROM\" label=\"mesa_gpu_drv.lib.so\">
+				<parent label=\"$backend_library\"/>
+			</service>"
+append config {
+			<service name="Gui"> <child name="nitpicker"/> </service>
+			<any-service> <parent/> <any-child/> </any-service>
+		</route>
+	</start>
 }
 
-set launchpad_config {
-<config>
-	<launcher name="init" ram_quota="1G" caps="2000">
-		<config verbose="yes">
-			<parent-provides>
-				<service name="ROM"/>
-				<service name="IRQ"/>
-				<service name="IO_MEM"/>
-				<service name="IO_PORT"/>
-				<service name="PD"/>
-				<service name="RM"/>
-				<service name="CPU"/>
-				<service name="LOG"/>
-				<service name="Gui"/>
-				<service name="Timer"/>
-				<service name="Gpu"/>
-			</parent-provides>
-
-			<start name="liquid_fb" caps="200">
-				<resource name="RAM" quantum="16M"/>
-				<provides> <service name="Framebuffer"/> <service name="Input"/> </provides>
-				<config resize_handle="off" animate="off" title="gears" width="600" height="600" xpos="100" ypos="100"/>
-				<route>
-				<any-service> <parent/> <any-child/> </any-service>
-				</route>
-			</start>}
-
-append launchpad_config "
-			<start name=\"$demo_binary\" caps=\"$demo_caps\">
-				<resource name=\"RAM\" quantum=\"$demo_ram_quota\"/>"
-
-append launchpad_config $demo_config
-
-append launchpad_config "
-				<route>
-					<service name=\"ROM\" label=\"egl_drv.lib.so\">
-						<parent label=\"$backend_library\"/>
-					</service>"
-append launchpad_config {
-					<any-service> <parent/> <any-child/> </any-service>
-				</route>
-			</start>
-			</config>
-	</launcher>
-</config>}
-
-append config {
-	<start name="launchpad" caps="512">
-		<resource name="RAM" quantum="512M"/>}
-append config $launchpad_config
-append config {
-	</start>}
-
-append_if $use_i965 config {
-	<start name="intel_fb_drv" caps="200">
-		<binary name="intel_gpu_drv"/>
+append_if $use_iris config {
+	<start name="intel_gpu_drv" caps="2000">
 		<resource name="RAM" quantum="40M"/>
-		<provides> <service name="Gpu"/> </provides>
+		<provides>
+			<service name="Gpu"/>
+			<service name="Platform"/>
+		</provides>
 		<route>
+			<service name="Platform"> <child name="drivers"/> </service>
 			<any-service> <parent /> <any-child/> </any-service>
+		</route>
+	</start>
+}
+
+append_if $use_etnaviv config {
+	<start name="imx8q_gpu_drv" caps="200">
+		<resource name="RAM" quantum="64M"/>
+		<provides> <service name="Drm"/> </provides>
+		<route>
+			<service name="Timer"> <child name="timer"/> </service>
+			<service name="Platform"> <child name="drivers"/> </service>
+			<any-service> <parent/> </any-service>
 		</route>
 	</start>}
 
@@ -154,14 +155,20 @@ install_config $config
 set boot_modules {
 	libc.lib.so vfs.lib.so libm.lib.so
 	egl.lib.so mesa.lib.so stdcxx.lib.so
-	expat.lib.so glapi.lib.so
-
-	egl_swrast.lib.so
+	expat.lib.so glapi.lib.so zlib.lib.so
+	core init ld.lib.so timer mesa_gpu-softpipe.lib.so
+	libdrm.lib.so
 }
 
-append_if $use_i965 boot_modules {
-	egl_i965.lib.so drm.lib.so
+append_if $use_iris boot_modules {
+	mesa_gpu-iris.lib.so libdrm.lib.so
 	intel_gpu_drv
+}
+
+append_if $use_etnaviv boot_modules {
+	mesa_gpu-etnaviv.lib.so libdrm.lib.so
+
+	imx8q_gpu_drv
 }
 
 append boot_modules $demo_modules

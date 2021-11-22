@@ -26,8 +26,34 @@ void Igd::Mmio::dump()
 	log("  Execlist_enable:           ", Hex(read<GFX_MODE::Execlist_enable>()));
 	log("  Virtual_addressing_enable: ", Hex(read<GFX_MODE::Virtual_addressing_enable>()));
 	log("  Ppgtt_enable:              ", Hex(read<GFX_MODE::Ppgtt_enable>()));
-	log("HWS_PGA: ", Hex(read<HWS_PGA_RCSUNIT>()));
-	log("HWSTAM: ", Hex(read<HWSTAM>()));
+	log("0x2080 - HWS_PGA: ", Hex(read<HWS_PGA_RCSUNIT>()));
+	log("0x2088 - PWRCTXA: ", Hex(read<PWRCTXA>()));
+	log("0x2098 - HWSTAM: ", Hex(read<HWSTAM>()));
+	log("0x0D84 - DRIVER_RENDER_FWAKE_ACK: ", Hex(read<DRIVER_RENDER_FWAKE_ACK>()));
+	log("0x4400 - ELEM_DESCRIPTOR1 :        ", Hex(read<ELEM_DESCRIPTOR1>()));
+	log("0x4404 - ELEM_DESCRIPTOR2 :        ", Hex(read<ELEM_DESCRIPTOR2>()));
+	log("0x2060 - HW_MEMRD :        ", Hex(read<HW_MEMRD>()));
+	log("0x2064 - IPEIR:          ", Hex(read<IPEIR>()));
+	log("0x2068 - IPEHR:          ", Hex(read<IPEHR>()));
+	log("0x206C - RCS_INSTDONE:   ", Hex(read<RCS_INSTDONE>()));
+	log("0x2074 - RCS_ACTHD:      ", Hex(read<RCS_ACTHD>()));
+	log("0x2078 - DMA_FADD_PREF:  ", Hex(read<DMA_FADD_PREF>()));
+	log("0x207C - RCS_INSTDONE_1: ", Hex(read<RCS_INSTDONE_1>()));
+	log("0x2094 - NOP_ID:         ", Hex(read<NOP_ID>()));
+	log("0x20C0 - INSTPM:         ", Hex(read<INSTPM>()));
+	log("0x2120 - Cache_mode_0:   ", Hex(read<Cache_Mode_0>()));
+	log("0x2124 - Cache_mode_1:   ", Hex(read<Cache_Mode_1>()));
+	log("0x2714 - Ctx S/R Ctrl:   ", Hex(read<CTXT_SR_CTL>()));
+	log("0x2140 - BB_ADDR:        ", Hex(read<BB_ADDR>()));
+	log("0x2110 - BB_STATE:       ", Hex(read<BB_STATE>()));
+	log("0x2180 - CCID:           ", Hex(read<CCID>()));
+	log("0x21A0 - CXT_SIZE:       ", Hex(read<CXT_SIZE>()));
+	log("0x21A4 - CXT_SIZE_EXT:   ", Hex(read<CXT_SIZE_NOEXT>()));
+	log("0x20E0 - MI_DISP_PWR_DWN ", Hex(read<MI_DISP_PWR_DWN>()));
+	log("0x20E4 - MI_ARB_STATE    ", Hex(read<MI_ARB_STATE>()));
+	log("0x20FC - MI_RDRET_STATE  ", Hex(read<MI_RDRET_STATE>()));
+	log("0x209C - MI_MODE         ", Hex(read<MI_MODE>()));
+	log("0x21D0 - ECOSKPD         ", Hex(read<ECOSKPD>()));
 }
 
 
@@ -78,6 +104,21 @@ void Igd::Mmio::error_dump()
 	}
 
 	log("RCS_EIR:        ", Hex(read<RCS_EIR>()));
+	if (read<RCS_EIR::Error_identity_bits>()) {
+		if (read<RCS_EIR::Error_instruction>())
+			log("  Error_instruction");
+		if (read<RCS_EIR::Error_mem_refresh>())
+			log("  Error_mem_refresh");
+		if (read<RCS_EIR::Error_page_table>())
+			log("  Error_page_table");
+
+		auto type = read<RCS_EIR::Error_identity_bits>();
+		if (type != (RCS_EIR::Error_page_table::masked(type) |
+		             RCS_EIR::Error_mem_refresh::masked(type) |
+		             RCS_EIR::Error_instruction::masked(type)))
+			log("  some unknown error bits are set");
+	}
+
 	log("RCS_ESR:        ", Hex(read<RCS_ESR>()));
 	log("RCS_EMR:        ", Hex(read<RCS_EMR>()));
 	log("RCS_INSTDONE:   ", Hex(read<RCS_INSTDONE>()));
@@ -305,16 +346,20 @@ void Igd::Mmio::context_status_pointer_dump()
 
 	uint32_t r = rp;
 	uint32_t w = wp;
-	if (r > w) { w += CTXT_ST_BUF_NUM; }
-	while (r < w) {
-		uint32_t const i = ++r % CTXT_ST_BUF_NUM;
 
-		uint64_t const cs  = read<CTXT_ST_BUF_RCSUNIT>(i);
-		uint32_t const csu = read<CTXT_ST_BUF_RCSUNIT::Context_status_udw>(i);
-		uint32_t const csl = read<CTXT_ST_BUF_RCSUNIT::Context_status_ldw>(i);
+	while (r != w) {
+
+		if (++r == CTXT_ST_BUF_NUM) { r = 0; }
+
+		uint32_t const i = r;
+
+		uint32_t const csu = read<CTXT_ST_BUF_RCSUNIT>(i*2+1);
+		uint32_t const csl = read<CTXT_ST_BUF_RCSUNIT>(i*2);
+		uint64_t const cs  = ((uint64_t)csu << 32) | csl;
+
 		log(i, "  Context_status:     ", Hex(cs));
 
-		Igd::Context_status_qword::access_t const v = csl;
+		Igd::Context_status_qword::access_t const v = cs;
 		log(i, "    Context_complete:  ", Igd::Context_status_qword::Context_complete::get(v));
 		log(i, "    Active_to_idle:    ", Igd::Context_status_qword::Active_to_idle::get(v));
 		log(i, "    Element_switch:    ", Igd::Context_status_qword::Element_switch::get(v));

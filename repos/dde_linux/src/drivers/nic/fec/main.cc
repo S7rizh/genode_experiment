@@ -11,22 +11,24 @@
  * version 2.
  */
 
+
 /* Genode includes */
 #include <base/log.h>
 #include <base/component.h>
 #include <base/heap.h>
 
-#include <component.h>
+/* local includes */
+#include <uplink_client.h>
 
 /* Linux emulation environment includes */
 #include <lx_emul.h>
-#include <lx_kit/env.h>
-#include <lx_kit/malloc.h>
-#include <lx_kit/scheduler.h>
-#include <lx_kit/timer.h>
-#include <lx_kit/irq.h>
-#include <lx_kit/backend_alloc.h>
-#include <lx_kit/work.h>
+#include <legacy/lx_kit/env.h>
+#include <legacy/lx_kit/malloc.h>
+#include <legacy/lx_kit/scheduler.h>
+#include <legacy/lx_kit/timer.h>
+#include <legacy/lx_kit/irq.h>
+#include <legacy/lx_kit/backend_alloc.h>
+#include <legacy/lx_kit/work.h>
 
 /* Linux module functions */
 extern "C" int module_fec_driver_init();
@@ -42,10 +44,11 @@ unsigned long jiffies;
 
 struct Main
 {
-	Genode::Env        &env;
-	Genode::Entrypoint &ep     { env.ep() };
-	Genode::Heap        heap   { env.ram(), env.rm() };
-	Root                root   { env, heap };
+	Genode::Env                                & env;
+	Genode::Entrypoint                         & ep            { env.ep() };
+	Genode::Attached_rom_dataspace               config_rom    { env, "config" };
+	Genode::Heap                                 heap          { env.ram(), env.rm() };
+	Genode::Constructible<Genode::Uplink_client> uplink_client { };
 
 	/* Linux task that handles the initialization */
 	Genode::Constructible<Lx::Task> linux;
@@ -80,7 +83,12 @@ struct Main
 		Lx::scheduler().schedule();
 	}
 
-	void announce() { env.parent().announce(ep.manage(root)); }
+	void announce()
+	{
+		uplink_client.construct( env, heap,
+			config_rom.xml().attribute_value(
+				"uplink_label", Genode::Session_label::String { "" }));
+	}
 
 	Lx::Task &linux_task() { return *linux; }
 };

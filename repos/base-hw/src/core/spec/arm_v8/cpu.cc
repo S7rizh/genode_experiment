@@ -11,11 +11,13 @@
  * under the terms of the GNU Affero General Public License version 3.
  */
 
-#include <board.h>
-#include <cpu.h>
-#include <kernel/thread.h>
-#include <cpu/memory_barrier.h>
+/* base includes */
 #include <util/bit_allocator.h>
+#include <cpu/memory_barrier.h>
+
+/* base-hw Core includes */
+#include <board.h>
+#include <kernel/thread.h>
 
 
 Genode::Cpu::Context::Context(bool privileged)
@@ -55,22 +57,20 @@ void Genode::Cpu::mmu_fault(Genode::Cpu::Context &,
 }
 
 
-using Asid_allocator = Genode::Bit_allocator<65536>;
-
-static Asid_allocator &alloc() {
-	return *unmanaged_singleton<Asid_allocator>(); }
-
-
-Genode::Cpu::Mmu_context::Mmu_context(addr_t table)
-: ttbr(Ttbr::Baddr::masked(table))
+Genode::Cpu::Mmu_context::
+Mmu_context(addr_t                             table,
+            Board::Address_space_id_allocator &addr_space_id_alloc)
+:
+	_addr_space_id_alloc(addr_space_id_alloc),
+	ttbr(Ttbr::Baddr::masked(table))
 {
-	Ttbr::Asid::set(ttbr, (Genode::uint16_t)alloc().alloc());
+	Ttbr::Asid::set(ttbr, (Genode::uint16_t)_addr_space_id_alloc.alloc());
 }
 
 
 Genode::Cpu::Mmu_context::~Mmu_context()
 {
-	alloc().free(id());
+	_addr_space_id_alloc.free(id());
 }
 
 
@@ -99,7 +99,7 @@ static inline void cache_maintainance(Genode::addr_t const base,
 
 
 void Genode::Cpu::cache_coherent_region(addr_t const base,
-                                size_t const size)
+                                        size_t const size)
 {
 	Genode::memory_barrier();
 
@@ -112,6 +112,36 @@ void Genode::Cpu::cache_coherent_region(addr_t const base,
 	};
 
 	cache_maintainance(base, size, lambda);
+}
+
+
+void Genode::Cpu::cache_clean_invalidate_data_region(addr_t const base,
+                                                     size_t const size)
+{
+	Genode::memory_barrier();
+
+	auto lambda = [] (addr_t const base) {
+		asm volatile("dc civac, %0" :: "r" (base)); };
+
+	cache_maintainance(base, size, lambda);
+
+	asm volatile("dsb sy");
+	asm volatile("isb");
+}
+
+
+void Genode::Cpu::cache_invalidate_data_region(addr_t const base,
+                                               size_t const size)
+{
+	Genode::memory_barrier();
+
+	auto lambda = [] (addr_t const base) {
+		asm volatile("dc ivac, %0" :: "r" (base)); };
+
+	cache_maintainance(base, size, lambda);
+
+	asm volatile("dsb sy");
+	asm volatile("isb");
 }
 
 

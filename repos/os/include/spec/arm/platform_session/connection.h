@@ -21,7 +21,11 @@
 #include <rom_session/client.h>
 #include <util/xml_node.h>
 
-namespace Platform { struct Connection; }
+namespace Platform {
+
+	struct Device;
+	struct Connection;
+}
 
 
 class Platform::Connection : public Genode::Connection<Session>,
@@ -29,7 +33,9 @@ class Platform::Connection : public Genode::Connection<Session>,
 {
 	private:
 
-		Region_map                      & _rm;
+		friend class Device; /* 'Device' accesses '_rm' */
+
+		Region_map                       &_rm;
 		Rom_session_client                _rom {devices_rom()};
 		Constructible<Attached_dataspace> _ds  {};
 
@@ -44,30 +50,42 @@ class Platform::Connection : public Genode::Connection<Session>,
 	public:
 
 		Connection(Env &env)
-		: Genode::Connection<Session>(env, session(env.parent(),
-		                                           "ram_quota=%u, cap_quota=%u",
-		                                           RAM_QUOTA, CAP_QUOTA)),
-		  Client(cap()),
-		  _rm(env.rm()) { _try_attach(); }
+		:
+			Genode::Connection<Session>(env, session(env.parent(),
+			                                           "ram_quota=%u, cap_quota=%u",
+			                                           RAM_QUOTA, CAP_QUOTA)),
+			Client(cap()),
+			_rm(env.rm())
+		{
+			_try_attach();
+		}
 
 		void update()
 		{
-			if (_ds.constructed() && _rom.update() == true) { return; }
+			if (_ds.constructed() && _rom.update() == true)
+				return;
+
 			_try_attach();
 		}
 
 		void sigh(Signal_context_capability sigh) { _rom.sigh(sigh); }
 
-		Device_capability acquire_device(String const &device) override
+		Capability<Device_interface> acquire_device(Device_name const &name) override
 		{
 			return retry_with_upgrade(Ram_quota{6*1024}, Cap_quota{6}, [&] () {
-				return Client::acquire_device(device); });
+				return Client::acquire_device(name); });
 		}
 
-		Ram_dataspace_capability alloc_dma_buffer(size_t size) override
+		Capability<Device_interface> acquire_device()
+		{
+			return retry_with_upgrade(Ram_quota{6*1024}, Cap_quota{6}, [&] () {
+				return Client::acquire_single_device(); });
+		}
+
+		Ram_dataspace_capability alloc_dma_buffer(size_t size, Cache cache) override
 		{
 			return retry_with_upgrade(Ram_quota{size}, Cap_quota{2}, [&] () {
-				return Client::alloc_dma_buffer(size); });
+				return Client::alloc_dma_buffer(size, cache); });
 		}
 
 		template <typename FN>
@@ -82,54 +100,27 @@ class Platform::Connection : public Genode::Connection<Session>,
 				warning("Devices rom has invalid XML syntax"); }
 		}
 
-		Device_capability device_by_index(unsigned idx)
-		{
-			Device_capability cap;
-
-			with_xml([&] (Xml_node & xml) {
-				try {
-					Xml_node node = xml.sub_node(idx);
-					Device::Name name = node.attribute_value("name",
-					                                         Device::Name());
-					cap = acquire_device(name.string());
-				} catch(Xml_node::Nonexistent_sub_node) {
-					error(__func__, ": invalid device index ", idx);
-					error("device ROM content: ", xml);
-				}
-			});
-
-			return cap;
-		}
-
-		Device_capability device_by_property(char const * property,
-		                                     char const * value)
+		Capability<Device_interface> device_by_type(char const * type)
 		{
 			using String = Genode::String<64>;
 
-			Device_capability cap;
+			Capability<Device_interface> cap;
 
 			with_xml([&] (Xml_node & xml) {
 				xml.for_each_sub_node("device", [&] (Xml_node node) {
+
 					/* already found a device? */
-					if (cap.valid()) { return; }
+					if (cap.valid())
+						return;
 
-					bool found = false;
-					node.for_each_sub_node("property", [&] (Xml_node node) {
-						if ((node.attribute_value("name", String()) == property) &&
-						    (node.attribute_value("value", String()) == value)) {
-							found = true;
-						}
-					});
+					if (node.attribute_value("type", String()) != type)
+						return;
 
-					if (found) {
-						Device::Name name = node.attribute_value("name",
-						                                         Device::Name());
-						cap = acquire_device(name.string());
-					}
+					Device_name name = node.attribute_value("name", Device_name());
+					cap = acquire_device(name);
 				});
 				if (!cap.valid()) {
-					error(__func__, ": property=", property, " value=",
-					              value, " not found!");
+					error(__func__, ": type=", type, " not found!");
 					error("device ROM content: ", xml);
 				}
 			});

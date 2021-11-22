@@ -241,6 +241,7 @@ proc build_boot_image {binaries} {
 		}
 	}
 	# determine which XSD file to use for the init config
+	set init_xsd_file ""
 	foreach xsd_file $xsd_files {
 		set filename [file tail $xsd_file]
 		if {$filename == "init.xsd"} {
@@ -261,8 +262,10 @@ proc build_boot_image {binaries} {
 	run_boot_dir $binaries
 }
 
+
 # set expect match-buffer size
 match_max -d 40000
+
 
 ##
 # Execute Genode
@@ -484,6 +487,7 @@ proc get_cmd_arg { arg_name default_value } {
 	return $result
 }
 
+
 ##
 # Return command-line argument value
 #
@@ -644,10 +648,15 @@ proc kernel_specific_binary { binary {silent ""} } {
 }
 
 
+proc copy_file {src dst} {
+	file copy -force $src $dst
+}
+
+
 proc copy_genode_binaries_to_run_dir { binaries } {
 
 	foreach binary $binaries {
-		file copy -force bin/[kernel_specific_binary $binary] [run_dir]/genode/$binary
+		copy_file bin/[kernel_specific_binary $binary] [run_dir]/genode/$binary
 	}
 }
 
@@ -779,10 +788,12 @@ proc core_ld_opts { } {
 	return $ret
 }
 
+
 ##
 # Default core link address
 #
 proc core_link_address { } { return "0x01000000" }
+
 
 ##
 # Check if a specific file is included
@@ -834,6 +845,11 @@ proc board { } {
 	}
 	return $board_var
 }
+
+##
+# Return whether the board equals to the given string
+#
+proc have_board {board} { global board_var; return [expr {$board_var} eq {$board}] }
 
 
 ##
@@ -959,7 +975,7 @@ proc kernel_files { } { return { } }
 #
 proc build_core_image { modules } {
 
-	set core_obj [kernel_specific_binary core.o]
+	set core_obj [kernel_specific_binary core.a]
 
 	# replace 'core' with actual core-object name in 'modules' list
 	if {[lsearch $modules "core"] != -1} {
@@ -994,35 +1010,36 @@ proc build_core_image { modules } {
 	exec cp -f [run_dir]/genode/config [run_dir].config
 }
 
+
 proc build_initrd { modules } {
 
-    copy_genode_binaries_to_run_dir $modules
+	copy_genode_binaries_to_run_dir $modules
 
-    set modules [glob -nocomplain -tails -directory [run_dir]/genode/ *]
-    set excluded_modules [kernel_files]
+	set modules [glob -nocomplain -tails -directory [run_dir]/genode/ *]
+	set excluded_modules [kernel_files]
 
-    foreach file [glob -nocomplain [run_dir]/genode/*.config] {
+	foreach file [glob -nocomplain [run_dir]/genode/*.config] {
 		check_xml_syntax $file }
 
-    exec cp -f [run_dir]/genode/config [run_dir].config
+	exec cp -f [run_dir]/genode/config [run_dir].config
 
-    set here [pwd]
-    cd [run_dir]
-    puts "generating initrd"
-    exec cp genode/initramfs init
-    exec mkdir tmp
-    exec mkdir dev
-    set files "init\ntmp\ndev\ngenode\n"
-    append files [exec find genode -type f,l -printf "genode/%f\n"]
-    exec -ignorestderr echo $files | [installed_command cpio] -o -L -H newc > initrd
+	set here [pwd]
+	cd [run_dir]
+	puts "generating initrd"
+	exec cp genode/initramfs init
+	exec mkdir tmp
+	exec mkdir dev
+	set files "init\ntmp\ndev\ngenode\n"
+	append files [exec find genode -type f,l -printf "genode/%f\n"]
+	exec -ignorestderr echo $files | [installed_command cpio] -o -L -H newc > initrd
 
-    #workaround because cpio fails to compress broken links sometimes
-    exec touch dev/platform_info
-    cd genode
-    exec ln -s ../dev/platform_info platform_info
-    cd ..
-    exec -ignorestderr echo "genode/platform_info" | [installed_command cpio] -o -A -H newc -O initrd
-    cd ${here}
+	#workaround because cpio fails to compress broken links sometimes
+	exec touch dev/platform_info
+	cd genode
+	exec ln -s ../dev/platform_info platform_info
+	cd ..
+	exec -ignorestderr echo "genode/platform_info" | [installed_command cpio] -o -A -H newc -O initrd
+	cd ${here}
 }
 
 source [genode_dir]/tool/run/depot.inc
@@ -1052,14 +1069,15 @@ foreach include_name [get_cmd_arg --include ""] {
 		continue
 	}
 
-	# if it is relative, check run modules
-	set run_path [genode_dir]/tool/run
-	set dir { etc }
-	lappend dir $run_path
+	# if it is relative, check repositories and tool directory for run modules
+	set search_dirs {}
+	foreach rep_dir $repositories {
+		lappend search_dirs [file join $rep_dir tool run] }
+	lappend search_dirs [genode_dir]/tool/run
 
 	set found 0
-	foreach location $dir {
-		set include_file $location/$include_name
+	foreach dir $search_dirs {
+		set include_file $dir/$include_name
 		if {[file exists $include_file] == 1} {
 			puts "including $include_file"
 			lappend include_list $include_name
@@ -1067,7 +1085,6 @@ foreach include_name [get_cmd_arg --include ""] {
 
 			set found 1
 			break
-		} else {
 		}
 	}
 

@@ -18,11 +18,8 @@
 /* Genode includes */
 #include <util/mmio.h>
 
-/* core includes */
-#include <board.h>
+namespace Board {
 
-namespace Board
-{
 	/*
 	 * Redirection table entry
 	 */
@@ -31,15 +28,16 @@ namespace Board
 	/**
 	 * IO advanced programmable interrupt controller
 	 */
-	class Ioapic;
+	class Global_interrupt_controller;
 
 	/**
 	 * Programmable interrupt controller for core
 	 */
-	class Pic;
+	class Local_interrupt_controller;
 
 	enum { IRQ_COUNT = 256 };
 }
+
 
 struct Board::Irte : Genode::Register<64>
 {
@@ -48,12 +46,10 @@ struct Board::Irte : Genode::Register<64>
 	struct Mask : Bitfield<16, 1> { };
 };
 
-class Board::Ioapic : public Genode::Mmio
+
+class Board::Global_interrupt_controller : public Genode::Mmio
 {
 	private:
-
-		/* Number of Redirection Table entries */
-		unsigned _irte_count = 0;
 
 		enum {
 			/* Register selectors */
@@ -76,7 +72,19 @@ class Board::Ioapic : public Genode::Mmio
 			unsigned polarity;
 		};
 
-		static Irq_mode _irq_mode[IRQ_COUNT];
+		/*
+		 * Registers
+		 */
+
+		struct Ioregsel : Register<0x00, 32> { };
+		struct Iowin    : Register<0x10, 32>
+		{
+		    struct Maximum_redirection_entry : Bitfield<16, 8> { };
+		};
+
+		unsigned        _irte_count = 0;       /* number of redirection table entries */
+		Genode::uint8_t _lapic_id[NR_OF_CPUS]; /* unique name of the LAPIC of each CPU */
+		Irq_mode        _irq_mode[IRQ_COUNT];
 
 		/**
 		 * Return whether 'irq' is an edge-triggered interrupt
@@ -102,7 +110,7 @@ class Board::Ioapic : public Genode::Mmio
 
 	public:
 
-		Ioapic();
+		Global_interrupt_controller();
 
 		/**
 		 * Set/unset mask bit of IRTE for given vector
@@ -110,7 +118,8 @@ class Board::Ioapic : public Genode::Mmio
 		 * \param vector  targeted vector
 		 * \param set     whether to set or to unset the mask bit
 		 */
-		void toggle_mask(unsigned const vector, bool const set);
+		void toggle_mask(unsigned const vector,
+		                 bool     const set);
 
 		/**
 		 * Setup mode of an IRQ to specified trigger mode and polarity
@@ -119,21 +128,23 @@ class Board::Ioapic : public Genode::Mmio
 		 * \param trigger     new interrupt trigger mode
 		 * \param polarity    new interrupt polarity setting
 		 */
-		void irq_mode(unsigned irq_number, unsigned trigger,
+		void irq_mode(unsigned irq_number,
+		              unsigned trigger,
 		              unsigned polarity);
 
-		/*
-		 * Registers
-		 */
 
-		struct Ioregsel : Register<0x00, 32> { };
-		struct Iowin    : Register<0x10, 32>
-		{
-		    struct Maximum_redirection_entry : Bitfield<16, 8> { };
-		};
+		/***************
+		 ** Accessors **
+		 ***************/
+
+		void lapic_id(unsigned        cpu_id,
+		              Genode::uint8_t lapic_id);
+
+		Genode::uint8_t lapic_id(unsigned cpu_id) const;
 };
 
-class Board::Pic : public Genode::Mmio
+
+class Board::Local_interrupt_controller : public Genode::Mmio
 {
 	private:
 
@@ -158,14 +169,19 @@ class Board::Pic : public Genode::Mmio
 		/*
 		 * Interrupt control register
 		 */
-		struct Icr_low  : Register<0x300, 32, true> {
+		struct Icr_low  : Register<0x300, 32, true>
+		{
 			struct Vector          : Bitfield< 0, 8> { };
 			struct Delivery_status : Bitfield<12, 1> { };
 			struct Level_assert    : Bitfield<14, 1> { };
 		};
-		struct Icr_high : Register<0x310, 32, true> {
+
+		struct Icr_high : Register<0x310, 32, true>
+		{
 			struct Destination : Bitfield<24, 8> { };
 		};
+
+		Global_interrupt_controller &_global_irq_ctrl;
 
 		/**
 		 * Determine lowest pending interrupt in ISR register
@@ -174,11 +190,6 @@ class Board::Pic : public Genode::Mmio
 		 *         bit is set.
 		 */
 		inline unsigned get_lowest_bit(void);
-
-		/**
-		 * Mapping of our logical boot CPUs to the local APIC IDs
-		 */
-		static Genode::uint8_t lapic_ids[NR_OF_CPUS];
 
 	public:
 
@@ -195,9 +206,7 @@ class Board::Pic : public Genode::Mmio
 		/**
 		 * Constructor
 		 */
-		Pic();
-
-		Ioapic ioapic { };
+		Local_interrupt_controller(Global_interrupt_controller &global_irq_ctrl);
 
 		bool take_request(unsigned &irq);
 
@@ -213,7 +222,7 @@ class Board::Pic : public Genode::Mmio
 		{
 			if (cpu_id < NR_OF_CPUS) {
 				Id::access_t const lapic_id = read<Id>();
-				lapic_ids[cpu_id] = (lapic_id >> 24) & 0xff;
+				_global_irq_ctrl.lapic_id(cpu_id, (lapic_id >> 24) & 0xff);
 			}
 		}
 

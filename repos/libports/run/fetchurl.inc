@@ -4,13 +4,13 @@
 # \date   2016-06-05
 #
 
-if {[have_spec rpi3] ||
-    [expr [have_spec imx53] && [have_spec trustzone]]} {
+if {[have_board rpi3] || [have_board imx53_qsb_tz]} {
 	puts "Run script does not support this platform."
 	exit 0
 }
 
-if {[get_cmd_switch --autopilot] && [have_spec linux]} {
+if {[get_cmd_switch --autopilot] && ([have_board linux] ||
+                                     [have_board riscv_qemu])} {
 	puts "Autopilot mode is not supported on this platform."
 	exit 0
 }
@@ -28,7 +28,7 @@ if {[get_cmd_switch --autopilot] && [have_spec linux]} {
 proc socket_fs_plugin { } {
 	set result "<[ip_stack]"
 
-	if {[have_spec linux]} {
+	if {[have_board linux]} {
 		append result { ip_addr="10.0.2.55" netmask="255.255.255.0"}
 		append result { gateway="10.0.2.1" nameserver="1.1.1.1"}
 	} else {
@@ -47,9 +47,9 @@ import_from_depot [depot_user]/src/[base_src] \
                   [depot_user]/src/fetchurl \
                   [depot_user]/src/init \
                   [depot_user]/src/libc \
-                  [depot_user]/src/libcrypto \
+                  [depot_user]/src/nic_router \
                   [depot_user]/src/libssh \
-                  [depot_user]/src/libssl \
+                  [depot_user]/src/openssl \
                   [depot_user]/src/report_rom \
                   [depot_user]/src/vfs \
                   [depot_user]/src/vfs_[ip_stack] \
@@ -83,11 +83,44 @@ install_config {
 		<resource name="RAM" quantum="32M"/>
 		<binary name="init"/>
 		<route>
+			<service name="Uplink"> <child name="nic_router"/> </service>
 			<service name="ROM" label="config"> <parent label="drivers.config"/> </service>
 			<service name="Timer"> <child name="timer"/> </service>
 			<any-service> <parent/> </any-service>
 		</route>
-		<provides> <service name="Nic"/> </provides>
+	</start>
+
+	<start name="nic_router" caps="200">
+		<resource name="RAM" quantum="10M"/>
+		<provides>
+			<service name="Nic"/>
+			<service name="Uplink"/>
+		</provides>
+		<config verbose_domain_state="yes">
+
+			<policy label_prefix="fetchurl" domain="downlink"/>
+			<policy label_prefix="drivers"  domain="uplink"/>
+
+			<domain name="uplink">
+
+				<nat domain="downlink"
+				     tcp-ports="16384"
+				     udp-ports="16384"
+				     icmp-ids="16384"/>
+
+			</domain>
+
+			<domain name="downlink" interface="10.0.3.1/24">
+
+				<dhcp-server ip_first="10.0.3.2" ip_last="10.0.3.2" dns_config_from="uplink"/>
+
+				<tcp dst="0.0.0.0/0"><permit-any domain="uplink" /></tcp>
+				<udp dst="0.0.0.0/0"><permit-any domain="uplink" /></udp>
+				<icmp dst="0.0.0.0/0" domain="uplink"/>
+
+			</domain>
+
+		</config>
 	</start>
 
 	<start name="report_rom">

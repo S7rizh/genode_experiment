@@ -15,7 +15,7 @@
 
 /* Genode includes */
 #include <base/attached_dataspace.h>
-#include <platform_session/connection.h>
+#include <platform_session/device.h>
 
 /* local includes */
 #include <driver.h>
@@ -24,7 +24,7 @@
 #include <lx_emul_c.h>
 
 /* DRM-specific includes */
-#include <lx_emul/extern_c_begin.h>
+#include <legacy/lx_emul/extern_c_begin.h>
 #include <drm/drmP.h>
 #include <drm/drm_fb_cma_helper.h>
 #include <drm/drm_gem_cma_helper.h>
@@ -36,26 +36,53 @@
 #include <linux/component.h>
 #include <linux/phy/phy.h>
 #include <video/videomode.h>
-#include <lx_emul/extern_c_end.h>
+#include <legacy/lx_emul/extern_c_end.h>
 
-#include <lx_kit/scheduler.h> /* dependency of lx_emul/impl/completion.h */
+#include <legacy/lx_kit/scheduler.h> /* dependency of lx_emul/impl/completion.h */
 
-#include <lx_emul/impl/completion.h>
-#include <lx_emul/impl/delay.h>
-#include <lx_emul/impl/gfp.h>
-#include <lx_emul/impl/kernel.h>
-#include <lx_emul/impl/mutex.h>
-#include <lx_emul/impl/sched.h>
-#include <lx_emul/impl/slab.h>
-#include <lx_emul/impl/spinlock.h>
-#include <lx_emul/impl/timer.h>
-#include <lx_emul/impl/wait.h> /* dependency of lx_emul/impl/work.h */
-#include <lx_emul/impl/work.h>
+#include <legacy/lx_emul/impl/completion.h>
+#include <legacy/lx_emul/impl/delay.h>
+#include <legacy/lx_emul/impl/gfp.h>
+#include <legacy/lx_emul/impl/kernel.h>
+#include <legacy/lx_emul/impl/mutex.h>
+#include <legacy/lx_emul/impl/sched.h>
+#include <legacy/lx_emul/impl/slab.h>
+#include <legacy/lx_emul/impl/spinlock.h>
+#include <legacy/lx_emul/impl/timer.h>
+#include <legacy/lx_emul/impl/wait.h> /* dependency of lx_emul/impl/work.h */
+#include <legacy/lx_emul/impl/work.h>
 
-#include <lx_kit/irq.h>
-#include <lx_kit/malloc.h>
+#include <legacy/lx_kit/irq.h>
+#include <legacy/lx_kit/malloc.h>
 
 enum Device_id { DCSS, HDMI, MIPI, SRC, UNKNOWN };
+
+
+namespace Platform { struct Device_client; }
+
+
+struct Platform::Device_client : Rpc_client<Device_interface>
+{
+	Device_client(Capability<Device_interface> cap)
+	: Rpc_client<Device_interface>(cap) { }
+
+	Irq_session_capability irq(unsigned id = 0)
+	{
+		return call<Rpc_irq>(id);
+	}
+
+	Io_mem_session_capability io_mem(unsigned id, Range &range, Cache cache)
+	{
+		return call<Rpc_io_mem>(id, range, cache);
+	}
+
+	Dataspace_capability io_mem_dataspace(unsigned id = 0)
+	{
+		Range range { };
+		return Io_mem_session_client(io_mem(id, range, UNCACHED)).dataspace();
+	}
+};
+
 
 namespace Lx_kit {
 	Platform::Connection    & platform_connection();
@@ -74,22 +101,19 @@ Platform::Device_client & Lx_kit::platform_device(Device_id id)
 {
 	if (id == DCSS) {
 		static Platform::Device_client dcss {
-			platform_connection().device_by_property("compatible",
-			                                         "nxp,imx8mq-dcss") };
+			platform_connection().device_by_type("nxp,imx8mq-dcss") };
 		return dcss;
 	}
 
 	if (id == HDMI) {
 		static Platform::Device_client hdmi {
-			platform_connection().device_by_property("compatible",
-			                                         "fsl,imx8mq-hdmi") };
+			platform_connection().device_by_type("fsl,imx8mq-hdmi") };
 		return hdmi;
 	}
 
 	if (id == MIPI) {
 		static Platform::Device_client mipi {
-			platform_connection().device_by_property("compatible",
-			                                         "fsl,imx8mq-mipi-dsi_drm") };
+			platform_connection().device_by_type("fsl,imx8mq-mipi-dsi_drm") };
 		static bool update = true;
 		if (update) {
 			platform_connection().update();
@@ -1198,7 +1222,7 @@ struct Dma_wc_dataspace : Genode::Attached_ram_dataspace,
 	: Genode::Attached_ram_dataspace(Lx_kit::env().ram(),
 	                                 Lx_kit::env().rm(),
 	                                 size,
-	                                 Genode::Cache_attribute::WRITE_COMBINED) { }
+	                                 Genode::Cache::WRITE_COMBINED) { }
 };
 
 static Genode::List<Dma_wc_dataspace> &_dma_wc_ds_list()

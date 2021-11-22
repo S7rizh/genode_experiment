@@ -231,7 +231,7 @@ append config {
 
 	<report/>
 
-	<uplink domain="uplink"/>
+	<nic-client domain="uplink"/>
 
 	<domain name="uplink"
 	        interface="10.0.2.55/24"
@@ -269,7 +269,7 @@ append config {
         tcp_idle_timeout_sec="30"
         tcp_max_segm_lifetime_sec="15">
 
-	<uplink domain="uplink"/>
+	<nic-client domain="uplink"/>
 
 	<domain name="uplink"
 	        interface="10.0.2.55/24"
@@ -311,7 +311,7 @@ append config {
 
 	<report interval_sec="2" bytes="yes" config="no" />
 
-	<uplink domain="uplink"/>
+	<nic-client domain="uplink"/>
 
 	<domain name="uplink"
 	        interface="10.0.2.55/24"
@@ -345,7 +345,7 @@ append config {
 
 	<report interval_sec="2" bytes="yes" config="no" />
 
-	<uplink domain="uplink"/>
+	<nic-client domain="uplink"/>
 
 	<domain name="uplink"
 	        interface="10.0.2.55/24"
@@ -378,7 +378,10 @@ append config {
 
 	<start name="nic_router" caps="200" priority="-1">
 		<resource name="RAM" quantum="10M"/>
-		<provides><service name="Nic"/></provides>
+		<provides>
+			<service name="Nic"/>
+			<service name="Uplink"/>
+		</provides>
 		<route>
 			<service name="ROM" label="config"> <child name="dynamic_rom" label="nic_router.config"/> </service>
 			<service name="Nic"> <child name="nic_bridge"/> </service>

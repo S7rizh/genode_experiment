@@ -15,6 +15,8 @@
 #include <libc/component.h>
 #include <util/xml_node.h>
 
+#include <cstdlib>
+
 #include <VBox/settings.h>
 #include <SharedClipboard/VBoxClipboard.h>
 #include <VBox/HostServices/VBoxClipboardSvc.h>
@@ -93,7 +95,6 @@ void fireRuntimeErrorEvent(IEventSource* aSource, BOOL a_fatal,
 
 void Console::i_onAdditionsStateChange()
 {
-	dynamic_cast<GenodeConsole *>(this)->update_video_mode();
 }
 
 void GenodeConsole::update_video_mode()
@@ -149,7 +150,13 @@ void GenodeConsole::_handle_input()
 		if (!_vbox_keyboard || !_vbox_mouse)
 			return;
 
+		bool const caps_lock_from_rom { _caps_lock.constructed() };
+
 		auto keyboard_submit = [&] (Input::Keycode key, bool release) {
+
+			/* don't confuse guests and drop CapsLock events in ROM mode  */
+			if (caps_lock_from_rom && key == Input::KEY_CAPSLOCK)
+				return;
 
 			Scan_code scan_code(key);
 
@@ -168,7 +175,9 @@ void GenodeConsole::_handle_input()
 		auto curr_mouse_button_bits = [&] () {
 			return (_key_status[Input::BTN_LEFT]   ? MouseButtonState_LeftButton   : 0)
 			     | (_key_status[Input::BTN_RIGHT]  ? MouseButtonState_RightButton  : 0)
-			     | (_key_status[Input::BTN_MIDDLE] ? MouseButtonState_MiddleButton : 0);
+			     | (_key_status[Input::BTN_MIDDLE] ? MouseButtonState_MiddleButton : 0)
+			     | (_key_status[Input::BTN_SIDE]   ? MouseButtonState_XButton1     : 0)
+			     | (_key_status[Input::BTN_EXTRA]  ? MouseButtonState_XButton2     : 0);
 		};
 
 		unsigned const old_mouse_button_bits = curr_mouse_button_bits();
@@ -549,6 +558,7 @@ void GenodeConsole::_handle_sticky_keys()
 	/* remember last seen host caps lock state */
 	host_caps_lock = caps_lock;
 
+	/* CapsLock was toggled in ROM - inject press-release events */
 	if (trigger_caps_lock) {
 		_vbox_keyboard->PutScancode(Input::KEY_CAPSLOCK);
 		_vbox_keyboard->PutScancode(Input::KEY_CAPSLOCK | 0x80);

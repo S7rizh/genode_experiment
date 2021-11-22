@@ -11,6 +11,7 @@
 #include <usb_session/connection.h>
 #include <usb/usb.h>
 #include <util/xml_node.h>
+#include <os/ring_buffer.h>
 
 #include <extern_c_begin.h>
 #include <qemu_emul.h>
@@ -33,7 +34,6 @@ using Packet_alloc_failed = Usb::Session::Tx::Source::Packet_alloc_failed;
 using Packet_type         = Usb::Packet_descriptor::Type;
 using Packet_error        = Usb::Packet_descriptor::Error;
 
-
 static unsigned endpoint_number(USBEndpoint const *usb_ep)
 {
 		bool in = usb_ep->pid == USB_TOKEN_IN;
@@ -53,11 +53,18 @@ class Isoc_packet : Fifo<Isoc_packet>::Element
 		char                  *_content;
 		int                    _size;
 
+		int _packet_index { 0 };
+		unsigned _packet_in_offset { 0 };
+
 	public:
 
 		Isoc_packet(Usb::Packet_descriptor packet, char *content)
 		: _packet(packet), _content(content),
 			_size (_packet.read_transfer() ? _packet.transfer.actual_size : _packet.size())
+		{ }
+
+		Isoc_packet()
+		: _packet { Usb::Packet_descriptor() }, _content { nullptr }, _size { 0 }
 		{ }
 
 		bool copy(USBPacket *usb_packet)
@@ -77,6 +84,26 @@ class Isoc_packet : Fifo<Isoc_packet>::Element
 			}
 
 			return remaining <= usb_packet->iov.size;
+		}
+
+		bool copy_read(USBPacket *usb_packet)
+		{
+			if (!valid()) return false;
+
+			unsigned remaining = _packet.transfer.actual_packet_size[_packet_index];
+			/* this should not happen as there asserts in the qemu code */
+			if (remaining > usb_packet->iov.size) {
+				Genode::error("iov too small, ignoring packet content");
+			}
+			int copy_size = min(usb_packet->iov.size, remaining);
+
+			char *src = _content + _packet_in_offset;
+			usb_packet_copy(usb_packet, src, copy_size);
+
+			_packet_in_offset += _packet.transfer.packet_size[_packet_index];
+			++_packet_index;
+
+			return _packet_index == _packet.transfer.number_of_packets;
 		}
 
 		bool     valid()        const { return _content != nullptr; }
@@ -109,6 +136,16 @@ struct Completion : Usb::Completion
 		switch (packet.type) {
 		case Packet_type::CTRL:
 			actual_size = packet.control.actual_size;
+
+			/*
+			 * Disable remote wakeup (bit 5) in 'bmAttributes' (content[7]) in reported
+			 * configuration descriptor. On some systems (e.g., Windows) this will
+			 * cause devices to stop working.
+			 */
+			if (packet.control.request == USB_REQ_GET_DESCRIPTOR
+			    && actual_size >= 8 && content[1] == USB_DT_CONFIG)
+				content[7] &= ~USB_CFG_ATT_WAKEUP;
+
 			break;
 		case Packet_type::BULK:
 		case Packet_type::IRQ:
@@ -220,6 +257,9 @@ struct Usb_host_device : List<Usb_host_device>::Element
 	Fifo<Isoc_packet>             isoc_read_queue { };
 	Reconstructible<Isoc_packet>  isoc_write_packet { Usb::Packet_descriptor(), nullptr };
 
+	Genode::Ring_buffer<Isoc_packet, 5, Genode::Ring_buffer_unsynchronized> _isoch_out_queue { };
+	unsigned _isoch_out_pending { 0 };
+
 	Entrypoint  &_ep;
 	Signal_handler<Usb_host_device> state_dispatcher { _ep, *this, &Usb_host_device::state_change };
 
@@ -320,12 +360,11 @@ struct Usb_host_device : List<Usb_host_device>::Element
 			char *content = usb_raw.source()->packet_content(packet);
 
 			if (packet.type != Packet_type::ISOC) {
-				c->complete(packet, content);
+				if (c) c->complete(packet, content);
 				free_packet(packet);
 			} else {
 				/* isochronous in */
 				free_completion(packet);
-				_isoc_in_pending--;
 				Isoc_packet *new_packet = new (_alloc)
 					Isoc_packet(packet, content);
 				isoc_read_queue.enqueue(*new_packet);
@@ -345,7 +384,7 @@ struct Usb_host_device : List<Usb_host_device>::Element
 		}
 
 		isoc_read_queue.head([&] (Isoc_packet &head) {
-			if (head.copy(packet)) {
+			if (head.copy_read(packet)) {
 				isoc_read_queue.remove(head);
 				free_packet(&head);
 			}
@@ -358,18 +397,17 @@ struct Usb_host_device : List<Usb_host_device>::Element
 
 	bool isoc_new_packet()
 	{
-		unsigned count = 0;
-		isoc_read_queue.for_each([&count] (Isoc_packet&) { count++; });
-		return (count + _isoc_in_pending) < 3 ? true : false;
+		return _isoc_in_pending < 32 ? true : false;
 	}
 
 	void isoc_in_packet(USBPacket *usb_packet)
 	{
-		enum { NUMBER_OF_PACKETS = 2 };
+		enum { NUMBER_OF_PACKETS = 1 };
 		isoc_read(usb_packet);
 
-		if (!isoc_new_packet())
+		if (!isoc_new_packet()) {
 			return;
+		}
 
 		size_t size = usb_packet->ep->max_packet_size * NUMBER_OF_PACKETS;
 		try {
@@ -389,7 +427,6 @@ struct Usb_host_device : List<Usb_host_device>::Element
 			c->endpoint   = endpoint_number(usb_packet->ep);
 
 			_isoc_in_pending++;
-
 			submit(packet);
 		} catch (Packet_alloc_failed) {
 			if (verbose_warnings)
@@ -424,7 +461,7 @@ struct Usb_host_device : List<Usb_host_device>::Element
 			if (isoc_write_packet->packet_count() < NUMBER_OF_PACKETS)
 				return;
 
-			submit(isoc_write_packet->packet());
+			_isoch_out_queue.add(*&*isoc_write_packet);
 		}
 
 		size_t size = usb_packet->ep->max_packet_size * NUMBER_OF_PACKETS;
@@ -443,6 +480,16 @@ struct Usb_host_device : List<Usb_host_device>::Element
 				warning("xHCI: packet allocation failed (size ", Hex(size), "in ", __func__, ")");
 			isoc_write_packet.construct(Usb::Packet_descriptor(), nullptr);
 			return;
+		}
+
+		if (_isoch_out_pending == 0 && _isoch_out_queue.avail_capacity() > 1) {
+			return;
+		}
+
+		while (!_isoch_out_queue.empty()) {
+			Isoc_packet i = _isoch_out_queue.get();
+			submit(i.packet());
+			_isoch_out_pending++;
 		}
 	}
 
@@ -508,6 +555,11 @@ struct Usb_host_device : List<Usb_host_device>::Element
 
 	void free_packet(Usb::Packet_descriptor &packet)
 	{
+		if (packet.type == Packet_type::ISOC) {
+			if (packet.read_transfer()) _isoc_in_pending--;
+			else _isoch_out_pending--;
+		}
+
 		free_completion(packet);
 		usb_raw.source()->release_packet(packet);
 	}
@@ -534,6 +586,8 @@ struct Usb_host_device : List<Usb_host_device>::Element
 		if (packet.completion) {
 			dynamic_cast<Completion *>(packet.completion)->free();
 		}
+		/* make sure we free the completion only once! */
+		packet.completion = nullptr;
 	}
 
 	Completion *find_valid_completion(USBPacket *p)
@@ -604,6 +658,20 @@ struct Usb_host_device : List<Usb_host_device>::Element
 			if (verbose_warnings)
 				warning(__func__, " packet allocation failed");
 			p->status = USB_RET_NAK;
+		}
+	}
+
+
+	void flush_transfers(uint8_t ep)
+	{
+		try {
+			Usb::Packet_descriptor packet = alloc_packet(0, false);
+			packet.type                   = Usb::Packet_descriptor::FLUSH_TRANSFERS;
+			packet.number                 = ep;
+			submit(packet);
+		} catch (...) {
+			if (verbose_warnings)
+				warning(__func__, " packet allocation failed");
 		}
 	}
 
@@ -830,10 +898,14 @@ static void usb_host_ep_stopped(USBDevice *udev, USBEndpoint *usb_ep)
 	bool     in = usb_ep->pid == USB_TOKEN_IN;
 	unsigned ep = endpoint_number(usb_ep);
 
+	/* flush pending transfers */
+	dev->flush_transfers(ep);
+
 	switch (usb_ep->type) {
 	case USB_ENDPOINT_XFER_ISOC:
-		if (in)
-			dev->isoc_in_flush(ep);
+		if (in) {
+			dev->isoc_in_flush(ep, true);
+		}
 	default:
 		return;
 	}
@@ -978,6 +1050,7 @@ struct Usb_devices : List<Usb_host_device>
 	: _ep(ep), _env(env), _alloc(alloc)
 	{
 		_devices_rom.sigh(_device_dispatcher);
+		_devices_update();
 	}
 
 	void destroy()

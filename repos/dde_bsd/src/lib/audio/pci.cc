@@ -76,7 +76,7 @@ class Pci_driver : public Bsd::Bus_driver
 			                   Pci_driver &drv)
 			: Genode::Allocator_avl(&alloc), env(env), _drv(drv) { }
 
-			Genode::addr_t alloc(Genode::size_t size, int align)
+			Genode::addr_t alloc(Genode::size_t size, unsigned align)
 			{
 				using namespace Genode;
 
@@ -138,7 +138,7 @@ class Pci_driver : public Bsd::Bus_driver
 			return Genode::retry<Genode::Out_of_ram>(
 				[&] () {
 					return Genode::retry<Genode::Out_of_caps>(
-						[&] () { return _pci.alloc_dma_buffer(size); },
+						[&] () { return _pci.alloc_dma_buffer(size, Genode::UNCACHED); },
 						[&] () { _pci.upgrade_caps(2); });
 				},
 				[&] () {

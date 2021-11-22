@@ -1,12 +1,15 @@
 PKG_DIR = $(call select_from_ports,gdb)/src/noux-pkg/gdb
 
 CONFIGURE_ARGS += --program-prefix=$(PROGRAM_PREFIX) \
-                  --target=$(GDB_TARGET)
+                  --target=$(GDB_TARGET) \
+                  --disable-sim
 
 # the configure script calls the linker with "-lexpat", which fails
 CONFIGURE_ARGS += --without-expat
 CPPFLAGS += -DHAVE_LIBEXPAT=1
-CFLAGS += -Wno-error=sizeof-pointer-memaccess -Wno-error=unused-value
+CFLAGS += -Wno-error=sizeof-pointer-memaccess \
+          -Wno-error=unused-value \
+          -Wno-error=overflow
 
 LIBS += stdcxx ncurses expat
 

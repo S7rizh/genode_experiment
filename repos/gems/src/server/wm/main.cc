@@ -37,7 +37,7 @@ namespace Wm {
 }
 
 
-struct Wm::Main
+struct Wm::Main : Pointer::Tracker
 {
 	Genode::Env &env;
 
@@ -63,7 +63,7 @@ struct Wm::Main
 	Gui::Connection focus_gui_session { env };
 
 	Gui::Root gui_root { env, window_registry, heap, env.ram(),
-	                     pointer_reporter, focus_request_reporter,
+	                     *this, focus_request_reporter,
 	                     focus_gui_session };
 
 	void handle_focus_update()
@@ -111,6 +111,37 @@ struct Wm::Main
 
 	Report_forwarder _report_forwarder { env, heap };
 	Rom_forwarder    _rom_forwarder    { env, heap };
+
+	Genode::Signal_handler<Main> _update_pointer_report_handler =
+		{ env.ep(), *this, &Main::_handle_update_pointer_report };
+
+	void _handle_update_pointer_report()
+	{
+		Pointer::Position pos = gui_root.last_observed_pointer_pos();
+
+		Reporter::Xml_generator xml(pointer_reporter, [&] ()
+		{
+			if (pos.valid) {
+				xml.attribute("xpos", pos.value.x());
+				xml.attribute("ypos", pos.value.y());
+			}
+		});
+	}
+
+	/**
+	 * Pointer::Tracker interface
+	 *
+	 * This method is called during the event handling, which may affect
+	 * multiple 'Pointer::State' instances. Hence, at call time, not all
+	 * pointer states may be up to date. To ensure the consistency of all
+	 * pointer states when creating the report, we merely schedule a call
+	 * of '_handle_update_pointer_report' that is executed after the event
+	 * handling is finished.
+	 */
+	void update_pointer_report() override
+	{
+		_update_pointer_report_handler.local_submit();
+	}
 
 	Main(Genode::Env &env) : env(env)
 	{

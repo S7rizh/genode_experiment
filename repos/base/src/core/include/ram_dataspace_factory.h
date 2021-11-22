@@ -32,7 +32,8 @@ class Genode::Ram_dataspace_factory : public Ram_allocator,
 {
 	public:
 
-		struct Phys_range { addr_t start, end; };
+		typedef Range_allocator::Range Phys_range;
+
 		static Phys_range any_phys_range() { return { 0UL, ~0UL }; }
 
 		struct Virt_range { addr_t start, size; };
@@ -105,7 +106,7 @@ class Genode::Ram_dataspace_factory : public Ram_allocator,
 		 ** Ram_allocator interface **
 		 *****************************/
 
-		Ram_dataspace_capability alloc(size_t, Cache_attribute) override;
+		Ram_dataspace_capability alloc(size_t, Cache) override;
 		void free(Ram_dataspace_capability) override;
 		size_t dataspace_size(Ram_dataspace_capability ds) const override;
 };

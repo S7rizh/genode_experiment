@@ -15,8 +15,8 @@ ENTRY(_start)
 
 PHDRS
 {
-	ro PT_LOAD;
-	rw PT_LOAD;
+	ro PT_LOAD FLAGS(5);
+	rw PT_LOAD FLAGS(6);
 	boot PT_LOAD FLAGS(4);
 }
 
@@ -114,10 +114,10 @@ SECTIONS
 	} : rw
 
 	.bss : {
-		_bss_start = ALIGN(4);
+		_bss_start = ALIGN(8);
 		*(.bss .bss.* .gnu.linkonce.b.* COMMON)
 	}
-	_bss_end = ALIGN(4);
+	_bss_end = ALIGN(8);
 
 	/* separate location for the binaries of the boot modules */
 	.data.boot_modules_binaries : { *(.data.boot_modules_binaries) } : boot

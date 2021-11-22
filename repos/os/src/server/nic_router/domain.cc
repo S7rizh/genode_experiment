@@ -42,20 +42,9 @@ Domain_base::Domain_base(Xml_node const node)
 
 void Domain::_log_ip_config() const
 {
-	Ipv4_config const &ip_config = *_ip_config;
-	if (_config.verbose()) {
-		if (!ip_config.valid &&
-			(ip_config.interface_valid ||
-			 ip_config.gateway_valid ||
-			 !ip_config.dns_servers.empty()))
-		{
-			log("[", *this, "] malformed ", _ip_config_dynamic ? "dynamic" :
-			    "static", "IP config: ", ip_config);
-		}
-	}
 	if (_config.verbose_domain_state()) {
 		log("[", *this, "] ", _ip_config_dynamic ? "dynamic" : "static",
-		    " IP config: ", ip_config);
+		    " IP config: ", *_ip_config);
 	}
 }
 
@@ -66,14 +55,14 @@ void Domain::_prepare_reconstructing_ip_config()
 		throw Ip_config_static(); }
 
 	/* discard old IP config if any */
-	if (ip_config().valid) {
+	if (ip_config().valid()) {
 
 		/* mark IP config invalid */
 		_ip_config.construct(_alloc);
 
 		/* detach all dependent interfaces from old IP config */
 		_interfaces.for_each([&] (Interface &interface) {
-			interface.detach_from_ip_config();
+			interface.detach_from_ip_config(*this);
 		});
 		_ip_config_dependents.for_each([&] (Domain &domain) {
 			domain._interfaces.for_each([&] (Interface &interface) {
@@ -94,7 +83,7 @@ void Domain::_finish_reconstructing_ip_config()
 	_log_ip_config();
 
 	/* attach all dependent interfaces to new IP config if it is valid */
-	if (ip_config().valid) {
+	if (ip_config().valid()) {
 		_interfaces.for_each([&] (Interface &interface) {
 			interface.attach_to_ip_config(*this, ip_config());
 		});
@@ -124,15 +113,15 @@ void Domain::discard_ip_config()
 void Domain::ip_config_from_dhcp_ack(Dhcp_packet &dhcp_ack)
 {
 	_reconstruct_ip_config([&] (Reconstructible<Ipv4_config> &ip_config) {
-		ip_config.construct(dhcp_ack, _alloc); });
+		ip_config.construct(dhcp_ack, _alloc, *this); });
 }
 
 
 void Domain::try_reuse_ip_config(Domain const &domain)
 {
-	if (ip_config().valid ||
+	if (ip_config().valid() ||
 	    !_ip_config_dynamic ||
-	    !domain.ip_config().valid ||
+	    !domain.ip_config().valid() ||
 	    !domain._ip_config_dynamic)
 	{
 		return;
@@ -258,16 +247,42 @@ void Domain::init(Domain_tree &domains)
 		if (_ip_config_dynamic) {
 			_invalid("DHCP server and client at once"); }
 
-		Dhcp_server &dhcp_server = *new (_alloc)
-			Dhcp_server(dhcp_server_node, *this, _alloc,
-			            ip_config().interface, domains);
+		try {
+			Dhcp_server &dhcp_server = *new (_alloc)
+				Dhcp_server(dhcp_server_node, *this, _alloc,
+				            ip_config().interface(), domains);
 
-		try { dhcp_server.dns_server_from().ip_config_dependents().insert(this); }
-		catch (Pointer<Domain>::Invalid) { }
+			try {
+				dhcp_server.
+					dns_config_from().ip_config_dependents().insert(this);
+			}
+			catch (Pointer<Domain>::Invalid) { }
 
-		_dhcp_server = dhcp_server;
-		if (_config.verbose()) {
-			log("[", *this, "] DHCP server: ", _dhcp_server()); }
+			_dhcp_server = dhcp_server;
+			if (_config.verbose()) {
+				log("[", *this, "] DHCP server: ", _dhcp_server()); }
+		}
+		catch (Bit_allocator_dynamic::Out_of_indices) {
+
+			/*
+			 * This message is printed independent from the routers
+			 * verbosity configuration in order to track down an exception
+			 * of type Bit_allocator_dynamic::Out_of_indices that was
+			 * previously not caught. We have observed this exception once,
+			 * but without a specific use pattern that would
+			 * enable for a systematic reproduction of the issue.
+			 * The uncaught exception was observed in a 21.03 Sculpt OS
+			 * with a manually configured router, re-configuration involved.
+			 */
+			log("[", *this, "] DHCP server: failed to initialize ",
+			    "(IP range: first ",
+			    dhcp_server_node.attribute_value("ip_first", Ipv4_address()),
+			    " last ",
+			    dhcp_server_node.attribute_value("ip_last", Ipv4_address()),
+			    ")");
+
+			throw Dhcp_server::Invalid { };
+		}
 	}
 	catch (Xml_node::Nonexistent_sub_node) { }
 	catch (Dhcp_server::Invalid) { _invalid("invalid DHCP server"); }
@@ -287,7 +302,7 @@ void Domain::init(Domain_tree &domains)
 		try {
 			Nat_rule &rule = *new (_alloc)
 				Nat_rule(domains, _tcp_port_alloc, _udp_port_alloc,
-				         _icmp_port_alloc, node);
+				         _icmp_port_alloc, node, _config.verbose());
 			_nat_rules.insert(&rule);
 			if (_config.verbose()) {
 				log("[", *this, "] NAT rule: ", rule); }
@@ -319,7 +334,7 @@ void Domain::deinit()
 	try {
 		Dhcp_server &dhcp_server = _dhcp_server();
 		_dhcp_server = Pointer<Dhcp_server>();
-		try { dhcp_server.dns_server_from().ip_config_dependents().remove(this); }
+		try { dhcp_server.dns_config_from().ip_config_dependents().remove(this); }
 		catch (Pointer<Domain>::Invalid) { }
 		destroy(_alloc, &dhcp_server);
 	}
@@ -329,8 +344,8 @@ void Domain::deinit()
 
 Ipv4_address const &Domain::next_hop(Ipv4_address const &ip) const
 {
-	if (ip_config().interface.prefix_matches(ip)) { return ip; }
-	if (ip_config().gateway_valid) { return ip_config().gateway; }
+	if (ip_config().interface().prefix_matches(ip)) { return ip; }
+	if (ip_config().gateway_valid()) { return ip_config().gateway(); }
 	throw No_next_hop();
 }
 
@@ -375,11 +390,18 @@ void Domain::report(Xml_generator &xml)
 			empty = false;
 		}
 		if (_config.report().config()) {
-			xml.attribute("ipv4", String<19>(ip_config().interface));
-			xml.attribute("gw",   String<16>(ip_config().gateway));
+			xml.attribute("ipv4", String<19>(ip_config().interface()));
+			xml.attribute("gw",   String<16>(ip_config().gateway()));
 			ip_config().for_each_dns_server([&] (Dns_server const &dns_server) {
 				xml.node("dns", [&] () {
 					xml.attribute("ip", String<16>(dns_server.ip()));
+				});
+			});
+			ip_config().dns_domain_name().with_string(
+				[&] (Dns_domain_name::String const &str)
+			{
+				xml.node("dns-domain", [&] () {
+					xml.attribute("name", str);
 				});
 			});
 			empty = false;
@@ -391,6 +413,12 @@ void Domain::report(Xml_generator &xml)
 			try { xml.node("arp-waiters",      [&] () { _arp_stats.report(xml);  }); empty = false; } catch (Report::Empty) { }
 			try { xml.node("dhcp-allocations", [&] () { _dhcp_stats.report(xml); }); empty = false; } catch (Report::Empty) { }
 		}
+		if (_config.report().dropped_fragm_ipv4() && _dropped_fragm_ipv4) {
+			xml.node("dropped-fragm-ipv4", [&] () {
+				xml.attribute("value", _dropped_fragm_ipv4);
+			});
+			empty = false;
+		}
 		_interfaces.for_each([&] (Interface &interface) {
 			try {
 				interface.report(xml);
@@ -400,6 +428,12 @@ void Domain::report(Xml_generator &xml)
 		if (empty) {
 			throw Report::Empty(); }
 	});
+}
+
+
+void Domain::add_dropped_fragm_ipv4(unsigned long dropped_fragm_ipv4)
+{
+	_dropped_fragm_ipv4 += dropped_fragm_ipv4;
 }
 
 

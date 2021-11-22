@@ -11,13 +11,15 @@
  * under the terms of the GNU Affero General Public License version 3.
  */
 
+/* base-hw Core includes */
 #include <board.h>
-#include <cpu.h>
 #include <platform.h>
 
 
-Board::Pic::Pic()
-: Genode::Mmio(Genode::Platform::mmio_to_virt(Board::LOCAL_IRQ_CONTROLLER_BASE)) { }
+Board::Pic::Pic(Global_interrupt_controller &)
+:
+	Genode::Mmio(Genode::Platform::mmio_to_virt(Board::LOCAL_IRQ_CONTROLLER_BASE))
+{ }
 
 
 bool Board::Pic::take_request(unsigned & irq)

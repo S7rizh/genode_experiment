@@ -17,12 +17,14 @@
 #include <base/sleep.h>
 #include <base/capability.h>
 #include <util/misc_math.h>
+#include <util/xml_generator.h>
 
 /* base-internal includes */
 #include <base/internal/crt0.h>
 #include <base/internal/stack_area.h>
 #include <base/internal/capability_space_tpl.h>
 #include <base/internal/globals.h>
+#include <base/internal/pistachio.h>
 
 /* core includes */
 #include <boot_modules.h>
@@ -34,15 +36,6 @@
 #include <util.h>
 #include <kip.h>
 #include <print_l4_thread_id.h>
-
-/* Pistachio includes */
-namespace Pistachio {
-#include <l4/kip.h>
-#include <l4/sigma0.h>
-#include <l4/space.h>
-#include <l4/bootinfo.h>
-#include <l4/schedule.h>
-}
 
 using namespace Genode;
 
@@ -60,6 +53,7 @@ static Synced_range_allocator<Allocator_avl> &_core_address_ranges()
 	static Synced_range_allocator<Allocator_avl> _core_address_ranges(nullptr);
 	return _core_address_ranges;
 }
+
 
 enum { PAGER_STACK_ELEMENTS = 512 };
 static unsigned long _core_pager_stack[PAGER_STACK_ELEMENTS];
@@ -633,6 +627,29 @@ Platform::Platform()
 
 		init_core_log(Core_log_range { core_local_addr, log_size } );
 	}
+
+	/* export platform specific infos */
+	{
+		void * phys_ptr   = nullptr;
+		size_t const size = 1 << get_page_size_log2();
+
+		if (ram_alloc().alloc_aligned(size, &phys_ptr,
+		                              get_page_size_log2()).ok()) {
+			addr_t const phys_addr = reinterpret_cast<addr_t>(phys_ptr);
+			addr_t const core_local_addr = phys_addr;
+
+			region_alloc().remove_range(core_local_addr, size);
+
+			Genode::Xml_generator xml(reinterpret_cast<char *>(core_local_addr),
+			                          size, "platform_info", [&] () {
+				xml.node("kernel", [&] () { xml.attribute("name", "pistachio"); });
+			});
+
+			_rom_fs.insert(new (core_mem_alloc()) Rom_module(phys_addr, size,
+			                                                 "platform_info"));
+		}
+	}
+
 }
 
 

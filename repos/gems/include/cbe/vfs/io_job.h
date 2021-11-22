@@ -285,6 +285,7 @@ namespace Util {
 
 		bool completed() const { return _complete; }
 		bool succeeded() const { return _success; }
+		Operation op() const { return _op; }
 
 		void print(Genode::Output &out) const
 		{
@@ -307,6 +308,8 @@ namespace Util {
 			default:        return false;
 			}
 		}
+
+		Genode::size_t current_offset() const { return _current_offset; }
 	};
 
 } /* namespace Util */

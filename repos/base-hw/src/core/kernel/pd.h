@@ -15,21 +15,20 @@
 #ifndef _CORE__KERNEL__PD_H_
 #define _CORE__KERNEL__PD_H_
 
-/* core includes */
+/* base-hw Core includes */
 #include <hw/assert.h>
-#include <cpu.h>
 #include <kernel/core_interface.h>
 #include <object.h>
-#include <translation_table.h>
+#include <board.h>
 
+/* base includes */
 #include <util/reconstructible.h>
 
-namespace Genode {
-	class Platform_pd;
-}
+namespace Genode { class Platform_pd; }
 
-namespace Kernel
-{
+
+namespace Kernel {
+
 	class Cpu;
 
 	/**
@@ -54,7 +53,6 @@ class Kernel::Pd
 		Genode::Platform_pd           &_platform_pd;
 		Capid_allocator                _capid_alloc { };
 		Object_identity_reference_tree _cap_tree    { };
-		bool                           _core_pd     { false };
 
 	public:
 
@@ -66,19 +64,16 @@ class Kernel::Pd
 		 * \param table        translation table of the PD
 		 * \param platform_pd  core object of the PD
 		 */
-		Pd(Hw::Page_table &table,
-		   Genode::Platform_pd &platform_pd)
-		: _table(table), _platform_pd(platform_pd),
-		  mmu_regs((addr_t)&table)
+		Pd(Hw::Page_table                    &table,
+		   Genode::Platform_pd               &platform_pd,
+		   Board::Address_space_id_allocator &addr_space_id_alloc)
+		:
+			_table(table),
+			_platform_pd(platform_pd),
+			mmu_regs((addr_t)&table, addr_space_id_alloc)
 		{
 			capid_t invalid = _capid_alloc.alloc();
 			assert(invalid == cap_id_invalid());
-
-			static bool first_pd = true;
-			if (first_pd) {
-				_core_pd = true;
-				first_pd = false;
-			}
 		}
 
 		~Pd()
@@ -87,9 +82,9 @@ class Kernel::Pd
 				oir->~Object_identity_reference();
 		}
 
-		static capid_t syscall_create(Genode::Kernel_object<Pd> & p,
-		                              Hw::Page_table            & tt,
-		                              Genode::Platform_pd       & pd)
+		static capid_t syscall_create(Genode::Kernel_object<Pd> &p,
+		                              Hw::Page_table            &tt,
+		                              Genode::Platform_pd       &pd)
 		{
 			return call(call_id_new_pd(), (Call_arg)&p,
 			            (Call_arg)&tt, (Call_arg)&pd);
@@ -114,13 +109,6 @@ class Kernel::Pd
 		Hw::Page_table      &translation_table()   { return _table;       }
 		Capid_allocator     &capid_alloc()         { return _capid_alloc; }
 		Object_identity_reference_tree &cap_tree() { return _cap_tree;    }
-		bool                 core_pd() const       { return _core_pd;     }
 };
-
-
-template<>
-inline Kernel::Core_object_identity<Kernel::Pd>::Core_object_identity(Kernel::Pd & pd)
-: Object_identity(pd.kernel_object()),
-  Object_identity_reference(this, pd.core_pd() ? pd : core_pd()) { }
 
 #endif /* _CORE__KERNEL__PD_H_ */

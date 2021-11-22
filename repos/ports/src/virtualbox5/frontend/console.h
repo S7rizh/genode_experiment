@@ -132,13 +132,6 @@ class GenodeConsole : public Console {
 
 		bool _key_status[Input::KEY_MAX + 1];
 
-		static bool _mouse_button(Input::Keycode keycode)
-		{
-			return keycode == Input::BTN_LEFT
-			    || keycode == Input::BTN_RIGHT
-			    || keycode == Input::BTN_MIDDLE;
-		}
-
 		void _handle_input();
 		void _handle_mode_change();
 		void _handle_cb_rom_change();
@@ -167,7 +160,7 @@ class GenodeConsole : public Console {
 			_input_sticky_keys_dispatcher(genode_env().ep(), *this, &GenodeConsole::handle_sticky_keys)
 		{
 			for (unsigned i = 0; i <= Input::KEY_MAX; i++)
-				_key_status[i] = 0;
+				_key_status[i] = false;
 
 			_input.sigh(_input_signal_dispatcher);
 

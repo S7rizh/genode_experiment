@@ -19,6 +19,7 @@
 namespace Kernel { class Cpu; }
 
 namespace Board {
+
 	using Genode::Vm_state;
 
 	enum { VCPU_MAX = 1 };
@@ -26,7 +27,8 @@ namespace Board {
 	struct Vm_page_table {};
 	struct Vm_page_table_array {};
 
-	struct Pic : Hw::Pic { struct Virtual_context {}; };
+	class Global_interrupt_controller { };
+	struct Pic : Hw::Pic { struct Virtual_context {}; Pic(Global_interrupt_controller &) { } };
 	struct Vcpu_context { Vcpu_context(Kernel::Cpu &) {} };
 }
 

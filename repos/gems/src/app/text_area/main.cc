@@ -17,7 +17,7 @@
 #include <base/attached_rom_dataspace.h>
 #include <base/buffered_output.h>
 #include <os/buffered_xml.h>
-#include <os/sandbox.h>
+#include <sandbox/sandbox.h>
 #include <os/dynamic_rom_session.h>
 #include <os/vfs.h>
 #include <os/reporter.h>
@@ -26,7 +26,6 @@
 #include <gui.h>
 #include <report.h>
 #include <dialog.h>
-#include <new_file.h>
 #include <child_state.h>
 
 namespace Text_area { struct Main; }

@@ -48,16 +48,28 @@ Ssh::Terminal_session::Terminal_session(Genode::Registry<Terminal_session> &reg,
 :
 	Element(reg, *this), conn(conn), _event_loop(event_loop)
 {
-	if (pipe(_fds) ||
-		ssh_event_add_fd(_event_loop,
-		                 _fds[0],
-		                 POLLIN,
-		                 write_avail_cb,
-		                 this) != SSH_OK ) {
+	if (pipe(_fds)) {
 		Genode::error("Failed to create wakeup pipe");
 		throw -1;
 	}
 	conn.write_avail_fd = _fds[1];
+
+	_state = PIPE_INITIALIZED;
+}
+
+void Ssh::Terminal_session::initialize_ssh_event_fds()
+{
+	if (_state != PIPE_INITIALIZED ||
+	    ssh_event_add_fd(_event_loop,
+	                     _fds[0],
+	                     POLLIN,
+	                     write_avail_cb,
+	                     this) != SSH_OK) {
+		Genode::error("Failed to initialize ssh event file descriptors");
+		throw -1;
+	}
+
+	_state = SSH_INITIALIZED;
 }
 
 
@@ -117,11 +129,6 @@ Ssh::Server::Server(Genode::Env &env,
 			throw Init_failed();
 		}
 
-		if (pthread_create(&_event_thread, nullptr, _server_loop, this)) {
-			Genode::error("could not create event thread");
-			throw Init_failed();
-		}
-
 		/* add pipe to wake up loop on late connecting terminal */
 		if (pipe(_server_fds) ||
 			ssh_event_add_fd(_event_loop,
@@ -131,6 +138,11 @@ Ssh::Server::Server(Genode::Env &env,
 			                 this) != SSH_OK ) {
 			Genode::error("Failed to create wakeup pipe");
 			throw -1;
+		}
+
+		if (pthread_create(&_event_thread, nullptr, _server_loop, this)) {
+			Genode::error("could not create event thread");
+			throw Init_failed();
 		}
 
 		Genode::log("Listen on port: ", _port);
@@ -235,11 +247,13 @@ void Ssh::Server::_parse_config(Genode::Xml_node const &config)
 	_log_level  = config.attribute_value("debug",      0u);
 	_log_logins = config.attribute_value("log_logins", true);
 
-	Genode::Mutex::Guard guard(_logins.mutex());
-	auto print = [&] (Login const &login) {
-		Genode::log("Login configured: ", login);
-	};
-	_logins.for_each(print);
+	{
+		Util::Pthread_mutex::Guard guard(_logins.mutex());
+		auto print = [&] (Login const &login) {
+			Genode::log("Login configured: ", login);
+		};
+		_logins.for_each(print);
+	}
 
 	if (_config_once) { return; }
 
@@ -331,7 +345,7 @@ void Ssh::Server::_log_login(User const &user, Session const &s, bool pubkey)
 
 void Ssh::Server::attach_terminal(Ssh::Terminal &conn)
 {
-	Genode::Mutex::Guard guard(_terminals.mutex());
+	Util::Pthread_mutex::Guard guard(_terminals.mutex());
 
 	try {
 		new (&_heap) Terminal_session(_terminals,
@@ -359,7 +373,7 @@ void Ssh::Server::attach_terminal(Ssh::Terminal &conn)
 
 void Ssh::Server::detach_terminal(Ssh::Terminal &conn)
 {
-	Genode::Mutex::Guard guard(_terminals.mutex());
+	Util::Pthread_mutex::Guard guard(_terminals.mutex());
 
 	Terminal_session *p = nullptr;
 	auto lookup = [&] (Terminal_session &t) {
@@ -378,6 +392,10 @@ void Ssh::Server::detach_terminal(Ssh::Terminal &conn)
 	auto invalidate_terminal = [&] (Session &sess) {
 		if (sess.terminal != &conn) { return; }
 		sess.terminal_detached = true;
+
+		/* flush before destroying the terminal */
+		try { sess.terminal->send(sess.channel); }
+		catch (...) { }
 	};
 	_sessions.for_each(invalidate_terminal);
 
@@ -387,7 +405,7 @@ void Ssh::Server::detach_terminal(Ssh::Terminal &conn)
 
 void Ssh::Server::update_config(Genode::Xml_node const &config)
 {
-	Genode::Mutex::Guard guard(_terminals.mutex());
+	Util::Pthread_mutex::Guard guard(_terminals.mutex());
 
 	_parse_config(config);
 	ssh_bind_options_set(_ssh_bind, SSH_BIND_OPTIONS_LOG_VERBOSITY, &_log_level);
@@ -419,7 +437,7 @@ Ssh::Session *Ssh::Server::lookup_session(ssh_session s)
 bool Ssh::Server::request_terminal(Session &session,
                                    const char* command)
 {
-	Genode::Mutex::Guard guard(_logins.mutex());
+	Util::Pthread_mutex::Guard guard(_logins.mutex());
 	Login const *l = _logins.lookup(session.user().string());
 	if (!l || !l->request_terminal) {
 		return false;
@@ -459,30 +477,15 @@ void Ssh::Server::incoming_connection(ssh_session s)
 		throw -1;
 	}
 
-	new (&_heap) Session(_sessions, s, &_channel_cb, ++_session_id);
-
-	ssh_set_server_callbacks(s, &_session_cb);
-
-	int auth_methods = SSH_AUTH_METHOD_UNKNOWN;
-	auth_methods += _allow_password  ? SSH_AUTH_METHOD_PASSWORD  : 0;
-	auth_methods += _allow_publickey ? SSH_AUTH_METHOD_PUBLICKEY : 0;
-	ssh_set_auth_methods(s, auth_methods);
-
 	/*
-	 * Normally we would check the result of the key exchange
-	 * function but for better or worse using callbacks leads to
-	 * a false negative. So ignore any result and move on in hope
-	 * that the callsbacks will handle the situation.
-	 *
-	 * FIXME investigate why it somtimes fails in the first place.
+	 * Queue up new ssh_session to be enabled later in pthread ssh loop.
+	 * We can't directly add the new Session object to the _session registry,
+	 * because this ssh callback may be invoked from within a
+	 * _session.for_each(...) invocation. The internal _session Genode::Mutex
+	 * is taken during _session.for_each(...) and during a 'new' here,
+	 * which would lead to a deadlock.
 	 */
-	int key_exchange_result = ssh_handle_key_exchange(s);
-
-	if (SSH_OK != key_exchange_result) {
-		Genode::warning("key exchange returned ", key_exchange_result);
-	}
-
-	ssh_event_add_session(_event_loop, s);
+	new (&_heap) Session(_new_sessions, s, &_channel_cb, ++_session_id);
 }
 
 
@@ -499,7 +502,7 @@ bool Ssh::Server::auth_password(ssh_session s, char const *u, char const *pass)
 	 * Even if there is no valid login for the user, let
 	 * the client try anyway and check multi login afterwards.
 	 */
-	Genode::Mutex::Guard guard(_logins.mutex());
+	Util::Pthread_mutex::Guard guard(_logins.mutex());
 	Login const *l = _logins.lookup(u);
 	if (l && l->user == u && l->password == pass) {
 		if (_allow_multi_login(s, *l)) {
@@ -560,7 +563,7 @@ bool Ssh::Server::auth_pubkey(ssh_session s, char const *u,
 	 * matches allow authentication to proceed.
 	 */
 	if (signature_state == SSH_PUBLICKEY_STATE_VALID) {
-		Genode::Mutex::Guard guard(_logins.mutex());
+		Util::Pthread_mutex::Guard guard(_logins.mutex());
 		Login const *l = _logins.lookup(u);
 		if (l && !ssh_key_cmp(pubkey, l->pub_key,
 		                      SSH_KEY_CMP_PUBLIC)) {
@@ -588,9 +591,24 @@ void Ssh::Server::loop()
 		}
 
 		{
-			Genode::Mutex::Guard guard(_terminals.mutex());
+			Util::Pthread_mutex::Guard guard(_terminals.mutex());
 
-			/* first remove all stale sessions */
+			/* finish pending initialization of terminal sessions */
+			auto initialize = [&] (Terminal_session &t) {
+				try {
+					if (t._state == Terminal_session::PIPE_INITIALIZED) {
+						t.initialize_ssh_event_fds();
+					}
+				} catch (...) {
+					/* Not sure what to do here - terminal is "almost" attached.
+					   Previously service was denied in that case but as
+					   descriptor handling must be performed in ssh loop thread
+					   it is too late for that. */
+				}
+			};
+			_terminals.for_each(initialize);
+
+			/* remove all stale sessions */
 			auto cleanup = [&] (Session &s) {
 				if (s.terminal_detached) {
 					Terminal_session *p = nullptr;
@@ -631,6 +649,45 @@ void Ssh::Server::loop()
 			};
 			_sessions.for_each(send);
 		}
+
+		/* enable all new sessions that got added by ssh callbacks */
+		auto activate = [&] (Session &inactive_session) {
+			/* re-queue session object */
+			new (&_heap) Session(_sessions,
+			                     inactive_session.session,
+			                     inactive_session.channel_cb,
+			                     inactive_session.id());
+
+			ssh_session s = inactive_session.session;
+
+			/* remove temporary object */
+			Genode::destroy(&_heap, &inactive_session);
+
+			/* activate session */
+			ssh_set_server_callbacks(s, &_session_cb);
+
+			int auth_methods = SSH_AUTH_METHOD_UNKNOWN;
+			auth_methods += _allow_password  ? SSH_AUTH_METHOD_PASSWORD  : 0;
+			auth_methods += _allow_publickey ? SSH_AUTH_METHOD_PUBLICKEY : 0;
+			ssh_set_auth_methods(s, auth_methods);
+
+			/*
+			 * Normally we would check the result of the key exchange
+			 * function but for better or worse using callbacks leads to
+			 * a false negative. So ignore any result and move on in hope
+			 * that the callsbacks will handle the situation.
+			 *
+			 * FIXME investigate why it somtimes fails in the first place.
+			 */
+			int key_exchange_result = ssh_handle_key_exchange(s);
+
+			if (SSH_OK != key_exchange_result) {
+				Genode::warning("key exchange returned ", key_exchange_result);
+			}
+
+			ssh_event_add_session(_event_loop, s);
+		};
+		_new_sessions.for_each(activate);
 	}
 }
 
@@ -638,19 +695,13 @@ void Ssh::Server::loop()
 void Ssh::Server::_wake_loop()
 {
 	/* wake the event loop up */
-	Libc::with_libc([&] {
-		char c = 1;
-		::write(_server_fds[1], &c, sizeof(c));
-	});
+	char c = 1;
+	::write(_server_fds[1], &c, sizeof(c));
 }
 
 
 static int write_avail_cb(socket_t fd, int revents, void *userdata)
 {
-	int n = 0;
-	Libc::with_libc([&] {
-		char c;
-		n = ::read(fd, &c, sizeof(char));
-	});
-	return n;
+	char c;
+	return ::read(fd, &c, sizeof(char));
 }

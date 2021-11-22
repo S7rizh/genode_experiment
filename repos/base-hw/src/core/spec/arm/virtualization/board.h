@@ -14,11 +14,15 @@
 #ifndef _CORE__SPEC__ARM__VIRTUALIZATION__BOARD_H_
 #define _CORE__SPEC__ARM__VIRTUALIZATION__BOARD_H_
 
-#include <translation_table.h>
+/* base-hw Core includes */
 #include <kernel/configuration.h>
 #include <kernel/irq.h>
 
+/* base-hw internal includes */
+#include <hw/spec/arm/lpae.h>
+
 namespace Board {
+
 	using Vm_page_table = Hw::Level_1_stage_2_translation_table;
 	using Vm_page_table_array =
 		Vm_page_table::Allocator::Array<Kernel::DEFAULT_TRANSLATION_TABLE_MAX>;
@@ -28,20 +32,30 @@ namespace Board {
 	using Vm_state = Genode::Vm_state;
 };
 
+
 namespace Kernel {
 	class Cpu;
 	class Vm;
 };
 
+
 struct Board::Vcpu_context
 {
-	struct Vm_irq : Kernel::Irq
+	class Vm_irq : public Kernel::Irq
 	{
-		Vm_irq(unsigned const irq, Kernel::Cpu &);
-		virtual ~Vm_irq() {};
+		private:
 
-		virtual void handle(Kernel::Cpu &, Kernel::Vm & vm, unsigned irq);
-		void occurred() override;
+			Kernel::Cpu &_cpu;
+
+		public:
+
+			Vm_irq(unsigned const irq, Kernel::Cpu &cpu);
+
+			virtual ~Vm_irq() { };
+
+			virtual void handle(Kernel::Vm &vm, unsigned irq);
+
+			void occurred() override;
 	};
 
 
@@ -49,7 +63,7 @@ struct Board::Vcpu_context
 	{
 		Pic_maintainance_irq(Kernel::Cpu &);
 
-		void handle(Kernel::Cpu &, Kernel::Vm &, unsigned) override { }
+		void handle(Kernel::Vm &, unsigned) override { }
 	};
 
 

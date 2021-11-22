@@ -15,18 +15,19 @@
 #ifndef _CORE__PLATFORM_PD_H_
 #define _CORE__PLATFORM_PD_H_
 
-/* Core includes */
-#include <translation_table.h>
+/* base-hw Core includes */
 #include <platform.h>
 #include <address_space.h>
-#include <hw/page_table_allocator.h>
 #include <object.h>
 #include <kernel/configuration.h>
 #include <kernel/object.h>
 #include <kernel/pd.h>
 
-namespace Hw
-{
+/* base-hw internal includes */
+#include <hw/page_table_allocator.h>
+
+namespace Hw {
+
 	using namespace Kernel;
 	using namespace Genode;
 
@@ -36,8 +37,9 @@ namespace Hw
 	class Address_space;
 }
 
-namespace Genode
-{
+
+namespace Genode {
+
 	class Platform_thread; /* forward declaration */
 
 	class Cap_space;
@@ -72,11 +74,11 @@ class Hw::Address_space : public Genode::Address_space
 		using Table = Hw::Page_table;
 		using Array = Table::Allocator::Array<DEFAULT_TRANSLATION_TABLE_MAX>;
 
-		Genode::Mutex               _mutex { };          /* table lock      */
-		Table                     & _tt;                 /* table virt addr */
-		Genode::addr_t              _tt_phys;            /* table phys addr */
-		Array                     * _tt_array = nullptr;
-		Table::Allocator          & _tt_alloc;           /* table allocator */
+		Genode::Mutex     _mutex { };          /* table lock      */
+		Table            &_tt;                 /* table virt addr */
+		Genode::addr_t    _tt_phys;            /* table phys addr */
+		Array            *_tt_array = nullptr;
+		Table::Allocator &_tt_alloc;           /* table allocator */
 
 		static inline Genode::Core_mem_allocator &_cma();
 
@@ -87,20 +89,21 @@ class Hw::Address_space : public Genode::Address_space
 		Kernel_object<Kernel::Pd> _kobj;
 
 		/**
-		 * Core-specific constructor
+		 * Constructor used for the Core PD object
 		 *
 		 * \param tt        reference to translation table
 		 * \param tt_alloc  reference to translation table allocator
 		 * \param pd        reference to platform pd object
 		 */
-		Address_space(Hw::Page_table            & tt,
-		              Hw::Page_table::Allocator & tt_alloc,
-		              Platform_pd               & pd);
+		Address_space(Hw::Page_table                    &tt,
+		              Hw::Page_table::Allocator         &tt_alloc,
+		              Platform_pd                       &pd,
+		              Board::Address_space_id_allocator &addr_space_id_alloc);
 
 	public:
 
 		/**
-		 * Constructor
+		 * Constructor used for objects other than the Core PD
 		 *
 		 * \param pd    reference to platform pd object
 		 */
@@ -181,18 +184,19 @@ class Genode::Platform_pd : public  Hw::Address_space,
 	protected:
 
 		/**
-		 * Constructor for core pd
+		 * Constructor used for the Core PD object
 		 *
 		 * \param tt        translation table address
 		 * \param tt_alloc  translation table allocator
 		 */
-		Platform_pd(Hw::Page_table            & tt,
-		            Hw::Page_table::Allocator & tt_alloc);
+		Platform_pd(Hw::Page_table                    &tt,
+		            Hw::Page_table::Allocator         &tt_alloc,
+		            Board::Address_space_id_allocator &addr_space_id_alloc);
 
 	public:
 
 		/**
-		 * Constructor for non-core pd
+		 * Constructor used for objects other than the Core PD
 		 *
 		 * \param label  name of protection domain
 		 */
@@ -228,7 +232,7 @@ class Genode::Platform_pd : public  Hw::Address_space,
 
 struct Genode::Core_platform_pd : Genode::Platform_pd
 {
-	Core_platform_pd();
+	Core_platform_pd(Board::Address_space_id_allocator &addr_space_id_alloc);
 };
 
 #endif /* _CORE__PLATFORM_PD_H_ */

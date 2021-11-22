@@ -31,9 +31,12 @@ struct Sculpt::Route : List_model<Route>::Element
 		case Service::Type::AUDIO_IN:    return "audio_in";
 		case Service::Type::AUDIO_OUT:   return "audio_out";
 		case Service::Type::BLOCK:       return "block";
+		case Service::Type::EVENT:       return "event";
+		case Service::Type::CAPTURE:     return "capture";
 		case Service::Type::FILE_SYSTEM: return "file_system";
 		case Service::Type::NIC:         return "nic";
 		case Service::Type::GUI:         return "gui";
+		case Service::Type::GPU:         return "gpu";
 		case Service::Type::RM:          return "rm";
 		case Service::Type::IO_MEM:      return "io_mem";
 		case Service::Type::IO_PORT:     return "io_port";
@@ -46,6 +49,7 @@ struct Sculpt::Route : List_model<Route>::Element
 		case Service::Type::RTC:         return "rtc";
 		case Service::Type::PLATFORM:    return "platform";
 		case Service::Type::VM:          return "vm";
+		case Service::Type::PD:          return "pd";
 		case Service::Type::UNDEFINED:   break;
 		}
 		return "undefined";
@@ -57,9 +61,12 @@ struct Sculpt::Route : List_model<Route>::Element
 		case Service::Type::AUDIO_IN:    return "Audio input";
 		case Service::Type::AUDIO_OUT:   return "Audio output";
 		case Service::Type::BLOCK:       return "Block device";
+		case Service::Type::EVENT:       return "Event";
+		case Service::Type::CAPTURE:     return "Capture";
 		case Service::Type::FILE_SYSTEM: return "File system";
 		case Service::Type::NIC:         return "Network";
 		case Service::Type::GUI:         return "GUI";
+		case Service::Type::GPU:         return "GPU";
 		case Service::Type::RM:          return "Region maps";
 		case Service::Type::IO_MEM:      return "Direct memory-mapped I/O";
 		case Service::Type::IO_PORT:     return "Direct port I/O";
@@ -72,6 +79,7 @@ struct Sculpt::Route : List_model<Route>::Element
 		case Service::Type::RTC:         return "Real-time clock";
 		case Service::Type::PLATFORM:    return "Device access";
 		case Service::Type::VM:          return "Hardware-based virtualization";
+		case Service::Type::PD:          return "Protection domain";
 		case Service::Type::UNDEFINED:   break;
 		}
 		return "<undefined>";

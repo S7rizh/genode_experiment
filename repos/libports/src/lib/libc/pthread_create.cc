@@ -29,65 +29,123 @@
 #include <internal/pthread.h>
 
 
-static Genode::Cpu_session * _cpu_session { nullptr };
-static unsigned              _id_cpu_map[32];
-static bool                  _verbose { false };
+using namespace Genode;
 
-void Libc::init_pthread_support(Genode::Cpu_session &cpu_session,
-                                Genode::Xml_node node)
+
+struct Placement_policy
+{
+	struct Placement : Interface
+	{
+		unsigned pthread_id;
+		unsigned cpu;
+
+		Placement (unsigned id, unsigned cpu)
+		: pthread_id(id), cpu(cpu) { }
+	};
+
+	Registry<Registered<Placement> > _policies { };
+
+	enum class Policy { ALL, SINGLE, MANUAL };
+
+	Policy _policy { Policy::ALL };
+
+	void policy(String<32> const &policy_name)
+	{
+		if (policy_name == "single-cpu")
+			_policy = Policy::SINGLE;
+		if (policy_name == "manual")
+			_policy = Policy::MANUAL;
+		if (policy_name == "all-cpus")
+			_policy = Policy::ALL;
+	}
+
+	unsigned placement(unsigned const pthread_id) const
+	{
+		switch (_policy) {
+		case Policy::SINGLE:
+			return 0U;
+		case Policy::MANUAL: {
+			unsigned cpu   = 0U;
+			bool     found = false;
+			_policies.for_each([&](auto const &policy) {
+				if (policy.pthread_id == pthread_id) {
+					cpu = policy.cpu;
+					found = true;
+				}
+			});
+			/* if no entry is found, Policy::ALL is applied */
+			return found ? cpu : pthread_id;
+		}
+		case Policy::ALL:
+		default:
+			return pthread_id;
+		}
+	}
+
+	void add_placement(Genode::Allocator &alloc, unsigned pthread, unsigned cpu)
+	{
+		new (alloc) Registered<Placement> (_policies, pthread, cpu);
+	}
+};
+
+
+static Cpu_session      *_cpu_session { nullptr };
+static bool              _verbose     { false };
+
+
+Placement_policy &placement_policy()
+{
+	static Placement_policy policy { };
+	return policy;
+}
+
+
+void Libc::init_pthread_support(Cpu_session &cpu_session,
+                                Xml_node const &node,
+                                Genode::Allocator &alloc)
 {
 	_cpu_session = &cpu_session;
 
 	_verbose = node.attribute_value("verbose", false);
 
-	String<32> placement("all-cpus");
-	placement = node.attribute_value("placement", placement);
+	String<32> const policy_name = node.attribute_value("placement",
+	                                                    String<32>("all-cpus"));
+	placement_policy().policy(policy_name);
 
-	if (placement == "single-cpu") {
-		return;
-	}
+	node.for_each_sub_node("thread", [&](Xml_node &policy) {
 
-	if (placement == "manual") {
-		node.for_each_sub_node("thread", [](Xml_node &node) {
-			if (node.has_attribute("id") && node.has_attribute("cpu")) {
-				unsigned const id  = node.attribute_value("id", 0U);
-				unsigned const cpu = node.attribute_value("cpu", 0U);
+		if (policy.has_attribute("id") && policy.has_attribute("cpu")) {
+			unsigned const id  = policy.attribute_value("id", 0U);
+			unsigned const cpu = policy.attribute_value("cpu", 0U);
 
-				if (id < sizeof(_id_cpu_map) / sizeof(_id_cpu_map[0])) {
-					_id_cpu_map[id] = cpu;
-					if (_verbose)
-						Genode::log("pthread.", id, " -> cpu ", cpu);
-				} else {
-					Genode::warning("pthread configuration ignored - "
-					                "id=", id, " cpu=", cpu);
-				}
-			}
-		});
-		return;
-	}
+			if (_verbose)
+				log("pthread.", id, " -> cpu ", cpu);
 
-	/* all-cpus and unknown case */
-	for (unsigned i = 0; i < sizeof(_id_cpu_map) / sizeof(_id_cpu_map[0]); i++)
-		_id_cpu_map[i] = i;
+			placement_policy().add_placement(alloc, id, cpu);
+		}
+	});
 }
 
 
 static unsigned pthread_id()
 {
-	static Genode::Mutex mutex;
+	static Mutex mutex;
 
 	static unsigned id = 0;
 
-	Genode::Mutex::Guard guard(mutex);
+	Mutex::Guard guard(mutex);
 
 	return id++;
 }
 
 
-int Libc::pthread_create(pthread_t *thread,
-                         void *(*start_routine) (void *), void *arg,
-                         size_t stack_size, char const * name,
-                         Cpu_session * cpu, Affinity::Location location)
+int Libc::pthread_create_from_session(pthread_t *thread,
+                                      void *(*start_routine) (void *),
+                                      void *arg,
+                                      size_t stack_size,
+                                      char const *name,
+                                      Cpu_session *cpu,
+                                      Affinity::Location location)
 {
 	Libc::Allocator alloc { };
 	pthread_t thread_obj = new (alloc)
@@ -104,10 +162,11 @@ int Libc::pthread_create(pthread_t *thread,
 }
 
 
-int Libc::pthread_create(pthread_t *thread, Thread &t)
+int Libc::pthread_create_from_thread(pthread_t *thread, Thread &t, void *stack_address)
 {
 	Libc::Allocator alloc { };
-	pthread_t thread_obj = new (alloc) pthread(t);
+
+	pthread_t thread_obj = new (alloc) pthread(t, stack_address);
 
 	if (!thread_obj)
 		return EAGAIN;
@@ -117,41 +176,46 @@ int Libc::pthread_create(pthread_t *thread, Thread &t)
 }
 
 
-extern "C"
+int Libc::pthread_create(pthread_t *thread, const pthread_attr_t *attr,
+                         void *(*start_routine) (void *), void *arg,
+                         char const *name)
 {
-	int pthread_create(pthread_t *thread, const pthread_attr_t *attr,
-	                   void *(*start_routine) (void *), void *arg)
-	{
-		if (!_cpu_session || !start_routine || !thread)
-			return EINVAL;
+	if (!_cpu_session || !start_routine || !thread)
+		return EINVAL;
 
-		size_t const stack_size = (attr && *attr && (*attr)->stack_size)
-		                        ? (*attr)->stack_size
-		                        : Libc::Component::stack_size();
+	size_t const stack_size = (attr && *attr && (*attr)->stack_size)
+	                        ? (*attr)->stack_size
+	                        : Libc::Component::stack_size();
 
-		using Genode::Affinity;
+	unsigned const id { pthread_id() };
+	unsigned const cpu = placement_policy().placement(id);
 
-		unsigned const id { pthread_id() };
-		unsigned const cpu = (id < sizeof(_id_cpu_map) / sizeof(_id_cpu_map[0])) ? _id_cpu_map[id] : 0;
+	String<32> const pthread_name { "pthread.", id };
+	Affinity::Space space { _cpu_session->affinity_space() };
+	Affinity::Location location { space.location_of_index(cpu) };
 
-		Genode::String<32> const pthread_name { "pthread.", id };
-		Affinity::Space space { _cpu_session->affinity_space() };
-		Affinity::Location location { space.location_of_index(cpu) };
+	if (_verbose)
+		log("create ", pthread_name, " -> cpu ", cpu);
 
-		if (_verbose)
-			Genode::log("create ", pthread_name, " -> cpu ", cpu);
+	int result =
+		Libc::pthread_create_from_session(thread, start_routine, arg,
+	                                      stack_size,
+	                                      name ? : pthread_name.string(),
+	                                      _cpu_session, location);
 
-		int result = Libc::pthread_create(thread, start_routine, arg, stack_size,
-		                                  pthread_name.string(), _cpu_session,
-		                                  location);
+	if ((result == 0) && attr && *attr &&
+	    ((*attr)->detach_state == PTHREAD_CREATE_DETACHED))
+		pthread_detach(*thread);
 
-		if ((result == 0) && attr && *attr &&
-		    ((*attr)->detach_state == PTHREAD_CREATE_DETACHED))
-			pthread_detach(*thread);
-
-		return result;
-	}
-
-	typeof(pthread_create) _pthread_create
-		__attribute__((alias("pthread_create")));
+	return result;
 }
+
+
+extern "C" int pthread_create(pthread_t *thread, const pthread_attr_t *attr,
+                              void *(*start_routine) (void *), void *arg)
+{
+	return Libc::pthread_create(thread, attr, start_routine, arg, nullptr);
+}
+
+
+extern "C" typeof(pthread_create) _pthread_create __attribute__((alias("pthread_create")));

@@ -17,11 +17,11 @@
 #include <driver.h>
 #include <lx_emul.h>
 
-#include <lx_kit/env.h>
-#include <lx_kit/malloc.h>
-#include <lx_kit/scheduler.h>
-#include <lx_kit/timer.h>
-#include <lx_kit/work.h>
+#include <legacy/lx_kit/env.h>
+#include <legacy/lx_kit/malloc.h>
+#include <legacy/lx_kit/scheduler.h>
+#include <legacy/lx_kit/timer.h>
+#include <legacy/lx_kit/work.h>
 
 struct workqueue_struct *tasklet_wq;
 
@@ -131,7 +131,7 @@ void Driver::Device::register_device()
 		probe_interface(udev->config->interface[i], &id);
 	}
 
-	driver.env.parent().announce(driver.ep.manage(driver.root));
+	driver.activate_network_session();
 	driver.env.parent().announce(driver.ep.manage(driver.terminal_root));
 }
 

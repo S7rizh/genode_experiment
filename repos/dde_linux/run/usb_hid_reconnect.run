@@ -1,22 +1,17 @@
 #
 # USB HID test
 #
-# Test connect and disconnect
+# Test connect and disconnect on Qemu
 
 assert_spec x86
 
-if { [have_spec linux] || [have_spec muen] } {
-	puts "Run script does not support Linux and Muen."
+if {[have_spec linux]} {
+	puts "Run script does not support Linux."
 	exit 0
 }
 
-if { [get_cmd_switch --autopilot] && [have_include "power_on/qemu"] } {
-	puts "Run script does not support autopilot mode on Qemu"
-	exit 0
-}
-
-if { [get_cmd_switch --autopilot] && ![have_spec x86_64] } {
-	puts "Run script does not support autopilot mode on this platform"
+if {![have_include "power_on/qemu"]} {
+	puts "Test requires to be run on Qemu."
 	exit 0
 }
 
@@ -26,7 +21,8 @@ if { [get_cmd_switch --autopilot] && ![have_spec x86_64] } {
 
 set build_components {
 	core init timer
-	drivers/usb
+	drivers/usb_host
+	drivers/usb_hid
 	server/event_dump
 	server/dynamic_rom
 }
@@ -67,17 +63,23 @@ append config {
 		<provides><service name="Timer"/></provides>
 	</start>
 
-	<start name="usb_drv" caps="120">
+	<start name="report_rom">
+		<resource name="RAM" quantum="1M"/>
+		<provides> <service name="Report"/> <service name="ROM"/> </provides>
+		<config verbose="no">
+			<default-policy report="usb_drv -> devices"/>
+		</config>
+	</start>
+
+	<start name="usb_drv" caps="150">
+		<binary name="} [usb_host_drv_binary] {"/>
 		<resource name="RAM" quantum="12M"/>
-		<config uhci="no" ohci="no" ehci="no" xhci="yes"
-		        capslock_led="rom" numlock_led="rom" scrlock_led="rom"
-		        bios_handoff="yes">
-			<hid/>
+		<provides> <service name="Usb"/> </provides>
+		<config uhci="no" ohci="no" ehci="no" xhci="yes" bios_handoff="yes">
+			<report devices="yes"/>
+			<policy label_prefix="usb_hid_drv" class="0x3"/>
 		</config>
 		<route>
-			<service name="ROM" label="capslock"> <child name="dynamic_rom"/> </service>
-			<service name="ROM" label="numlock">  <child name="dynamic_rom"/> </service>
-			<service name="ROM" label="scrlock">  <child name="dynamic_rom"/> </service>
 			<service name="ROM">      <parent/>    </service>
 			<service name="CPU">      <parent/>    </service>
 			<service name="PD">       <parent/>    </service>
@@ -87,7 +89,20 @@ append config {
 			<service name="RM">       <parent/>    </service>
 			<service name="Platform"> <any-child/> </service>
 			<service name="Timer">    <child name="timer"/> </service>
-			<service name="Event">    <child name="event_dump"/> </service>
+			<service name="Report">   <child name="report_rom"/> </service>
+		</route>
+	</start>
+
+	<start name="usb_hid_drv" caps="140">
+		<resource name="RAM" quantum="11M"/>
+		<config use_report="yes" capslock_led="rom" numlock_led="rom" scrlock_led="rom"/>
+		<route>
+			<service name="ROM" label="capslock"> <child name="dynamic_rom"/> </service>
+			<service name="ROM" label="numlock">  <child name="dynamic_rom"/> </service>
+			<service name="ROM" label="scrlock">  <child name="dynamic_rom"/> </service>
+			<service name="ROM" label="report"> <child name="report_rom"/> </service>
+			<service name="Event"> <child name="event_dump"/> </service>
+			<any-service> <parent/> <any-child/> </any-service>
 		</route>
 	</start>
 
@@ -138,8 +153,10 @@ install_config $config
 
 # generic modules
 set boot_modules {
-	core ld.lib.so init timer usb_drv event_dump dynamic_rom
+	core ld.lib.so init timer event_dump dynamic_rom
+	usb_hid_drv
 }
+append boot_modules [usb_host_drv_binary]
 
 append_platform_drv_boot_modules
 
@@ -147,8 +164,6 @@ build_boot_image $boot_modules
 
 append qemu_args " -device nec-usb-xhci,id=xhci -device usb-kbd,bus=xhci.0 -nographic"
 
-# autopilot test
-#run_genode_until forever
 # wait for keyboard
 run_genode_until {.*USB HID.*Keyboard.*} 60
 
@@ -166,12 +181,14 @@ for {set i 0} {$i < 50} {incr i} {
 	send "device_add usb-kbd,id=ukb1\n"
 
 	# wait for keyboard
-	run_genode_until {.*USB HID.*Keyboard.*\n} 20 $spawn_id
+	run_genode_until {.*USB HID.*Keyboard.*\n} 10 $spawn_id
 
 	# disconnect keyboard
 	send "device_del ukb1\n"
 
 	# wait for disconnect
-	run_genode_until {.*USB disconnect.*\n} 20 $spawn_id
+	run_genode_until {.*USB disconnect.*\n} 10 $spawn_id
 
 }
+
+puts "\nTest succeeded\n"

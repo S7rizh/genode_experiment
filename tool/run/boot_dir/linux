@@ -31,11 +31,11 @@ proc run_boot_dir {binaries} {
 	# Save config part of the image.elf for easy inspection
 	exec cp -f [run_dir]/genode/config [run_dir].config
 
-        if {[board] == "pc"} {
+        if {[have_board pc]} {
 
             build_initrd $binaries
 
-            file copy -force [genode_dir]/tool/boot/vmlinuz [run_dir]/vmlinuz
+            copy_file [genode_dir]/tool/boot/vmlinuz [run_dir]/vmlinuz
 
             if {[have_include "image/iso"]} {
                 install_iso_bootloader_to_run_dir

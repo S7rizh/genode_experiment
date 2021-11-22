@@ -12,6 +12,7 @@
  */
 
 /* base includes */
+#include <util/construct_at.h>
 #include <base/component.h>
 #include <base/log.h>
 
@@ -27,9 +28,9 @@ using Genode::size_t;
 using Kernel::Double_list;
 using Kernel::Double_list_item;
 
-void * operator new(__SIZE_TYPE__, void * p) { return p; }
 
 struct Item_load { char volatile x = 0, y = 0, z = 0; };
+
 
 struct Item : Item_load, Double_list_item<Item>
 {
@@ -39,6 +40,7 @@ struct Item : Item_load, Double_list_item<Item>
 
 	void iteration() { Genode::log(_id); }
 };
+
 
 struct Data
 {
@@ -50,9 +52,10 @@ struct Data
 	Data()
 	{
 		for (unsigned i = 0; i < nr_of_items; i++) {
-			new (&items[i]) Item(i + 1); }
+			Genode::construct_at<Item>(&items[i], i + 1); }
 	}
 };
+
 
 Data * data()
 {
@@ -60,11 +63,13 @@ Data * data()
 	return &d;
 }
 
+
 void done()
 {
 	Genode::log("done");
 	while (1) ;
 }
+
 
 void check(unsigned i1, unsigned l)
 {
@@ -85,11 +90,13 @@ void check(unsigned i1, unsigned l)
 	}
 }
 
+
 void print_each()
 {
 	Genode::log("print each");
 	data()->list.for_each([] (Item &i) { i.iteration(); });
 }
+
 
 Item * item(unsigned const i) {
 	return reinterpret_cast<Item *>(&data()->items[i - 1]); }

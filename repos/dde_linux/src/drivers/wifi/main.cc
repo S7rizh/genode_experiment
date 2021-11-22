@@ -93,7 +93,9 @@ void *wifi_get_buffer(void)
 
 
 /* exported by wifi.lib.so */
-extern void wifi_init(Genode::Env&, Genode::Blockade&, bool,
+extern void wifi_init(Genode::Env&,
+                      Genode::Blockade&,
+                      bool,
                       Genode::Signal_context_capability);
 
 

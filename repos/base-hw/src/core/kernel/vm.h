@@ -18,14 +18,13 @@ namespace Genode { class Vm_state; }
 
 /* core includes */
 #include <kernel/cpu_context.h>
-#include <kernel/kernel.h>
 #include <kernel/pd.h>
 #include <kernel/signal_receiver.h>
 
 #include <board.h>
 
-namespace Kernel
-{
+namespace Kernel {
+
 	/**
 	 * Kernel backend for a virtual machine
 	 */
@@ -55,6 +54,7 @@ class Kernel::Vm : private Kernel::Object, public Cpu_job
 
 		enum Scheduler_state { ACTIVE, INACTIVE };
 
+		Irq::Pool                 & _user_irq_pool;
 		Object                      _kernel_object { *this };
 		State                     & _state;
 		Signal_context            & _context;
@@ -71,10 +71,11 @@ class Kernel::Vm : private Kernel::Object, public Cpu_job
 		 * \param state    initial CPU state
 		 * \param context  signal for VM exceptions other than interrupts
 		 */
-		Vm(unsigned           cpu,
-		   State            & state,
-		   Signal_context   & context,
-		   Identity         & id);
+		Vm(Irq::Pool              & user_irq_pool,
+		   Cpu                    & cpu,
+		   Genode::Vm_state       & state,
+		   Kernel::Signal_context & context,
+		   Identity               & id);
 
 		/**
 		 * Inject an interrupt to this VM
@@ -128,7 +129,9 @@ class Kernel::Vm : private Kernel::Object, public Cpu_job
 
 		void pause()
 		{
-			if (_scheduled != INACTIVE) Cpu_job::_deactivate_own_share();
+			if (_scheduled != INACTIVE)
+				Cpu_job::_deactivate_own_share();
+
 			_scheduled = INACTIVE;
 		}
 

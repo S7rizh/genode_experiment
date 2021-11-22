@@ -47,6 +47,11 @@ void Device_model::destroy_element(Device & dev)
 		device._power_domain_list.destroy_all_elements(policy);
 	}
 
+	{
+		Reset_domain_update_policy policy(_env.heap);
+		device._reset_domain_list.destroy_all_elements(policy);
+	}
+
 	Genode::destroy(_env.heap, &device);
 }
 
@@ -54,7 +59,8 @@ void Device_model::destroy_element(Device & dev)
 Device & Device_model::create_element(Genode::Xml_node node)
 {
 	Device::Name name = node.attribute_value("name", Device::Name());
-	return *(new (_env.heap) Imx_device(name));
+	Device::Type type = node.attribute_value("type", Device::Type());
+	return *(new (_env.heap) Imx_device(name, type));
 }
 
 
@@ -86,5 +92,10 @@ void Device_model::update_element(Device & dev,
 	{
 		Power_domain_update_policy policy(_env.heap);
 		device._power_domain_list.update_from_xml(policy, node);
+	}
+
+	{
+		Reset_domain_update_policy policy(_env.heap);
+		device._reset_domain_list.update_from_xml(policy, node);
 	}
 }

@@ -14,20 +14,30 @@
 #ifndef _CORE__SPEC__RISCV__CPU_H_
 #define _CORE__SPEC__RISCV__CPU_H_
 
-/* Genode includes */
+/* base includes */
 #include <base/stdint.h>
 #include <cpu/cpu_state.h>
 #include <util/register.h>
 
+/* base internal includes */
 #include <base/internal/align_at.h>
 
-#include <kernel/interface.h>
+/* base-hw internal includes */
 #include <hw/spec/riscv/cpu.h>
+#include <hw/spec/riscv/page_table.h>
+
+/* base-hw Core includes */
+#include <kernel/interface.h>
+#include <spec/riscv/address_space_id_allocator.h>
 
 namespace Kernel { struct Thread_fault; }
 
-namespace Genode
-{
+
+namespace Board { class Address_space_id_allocator; }
+
+
+namespace Genode {
+
 	/**
 	 * CPU driver for core
 	 */
@@ -36,7 +46,9 @@ namespace Genode
 	typedef __uint128_t sizet_arithm_t;
 }
 
+
 namespace Kernel { class Pd; }
+
 
 class Genode::Cpu : public Hw::Riscv_cpu
 {
@@ -47,12 +59,20 @@ class Genode::Cpu : public Hw::Riscv_cpu
 			Context(bool);
 		};
 
-		struct Mmu_context
+		class Mmu_context
 		{
-			Sptbr::access_t sptbr = 0;
+			private:
 
-			Mmu_context(addr_t page_table_base);
-			~Mmu_context();
+				Board::Address_space_id_allocator &_addr_space_id_alloc;
+
+			public:
+
+				Satp::access_t satp = 0;
+
+				Mmu_context(addr_t                             page_table_base,
+				            Board::Address_space_id_allocator &addr_space_id_alloc);
+
+				~Mmu_context();
 		};
 
 
@@ -72,7 +92,7 @@ class Genode::Cpu : public Hw::Riscv_cpu
 			/*
 			 * Note: In core the address space id must be zero
 			 */
-			asm volatile ("sfence.vm\n");
+			asm volatile ("sfence.vma\n");
 		}
 
 		static void invalidate_tlb_by_pid(unsigned const /* pid */) { sfence(); }
@@ -86,5 +106,13 @@ class Genode::Cpu : public Hw::Riscv_cpu
 		                                size_t const size,
 		                                bool changed_cache_properties);
 };
+
+
+template <typename E, unsigned B, unsigned S>
+void Sv39::Level_x_translation_table<E, B, S>::_translation_added(addr_t, size_t)
+{
+	Genode::Cpu::sfence();
+}
+
 
 #endif /* _CORE__SPEC__RISCV__CPU_H_ */

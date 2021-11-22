@@ -11,6 +11,7 @@ SRC_CC  += irq.cc \
            mapped_io_mem_range.cc \
            pci.cc \
            printf.cc \
+           bug.cc \
            scheduler.cc \
            timer.cc \
            work.cc \
@@ -19,7 +20,7 @@ SRC_CC  += irq.cc \
 INC_DIR += $(REP_DIR)/src/include
 
 vpath %.cc $(PRG_DIR)
-vpath %.cc $(REP_DIR)/src/lx_kit
+vpath %.cc $(REP_DIR)/src/lib/legacy/lx_kit
 
 CC_CXX_WARN_STRICT =
 CC_OPT += -Wno-narrowing

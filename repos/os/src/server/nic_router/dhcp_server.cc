@@ -16,6 +16,7 @@
 #include <interface.h>
 #include <domain.h>
 #include <configuration.h>
+#include <xml_node.h>
 
 using namespace Net;
 using namespace Genode;
@@ -41,6 +42,18 @@ Dhcp_server_base::Dhcp_server_base(Xml_node const &node,
 
 			_invalid(domain, "invalid DNS server entry");
 		}
+	});
+	node.with_sub_node("dns-domain", [&] (Xml_node const &sub_node) {
+		xml_node_with_attribute(sub_node, "name", [&] (Xml_attribute const &attr) {
+			_dns_domain_name.set_to(attr);
+
+			if (domain.config().verbose() &&
+			    !_dns_domain_name.valid()) {
+
+				log("[", domain, "] rejecting oversized DNS "
+				    "domain name from DHCP server configuration");
+			}
+		});
 	});
 }
 
@@ -72,7 +85,7 @@ Dhcp_server::Dhcp_server(Xml_node            const  node,
                          Domain_tree               &domains)
 :
 	Dhcp_server_base(node, domain, alloc),
-	_dns_server_from(_init_dns_server_from(node, domains)),
+	_dns_config_from(_init_dns_config_from(node, domains)),
 	_ip_lease_time  (_init_ip_lease_time(node)),
 	_ip_first(node.attribute_value("ip_first", Ipv4_address())),
 	_ip_last(node.attribute_value("ip_last", Ipv4_address())),
@@ -108,7 +121,10 @@ void Dhcp_server::print(Output &output) const
 	_dns_servers.for_each([&] (Dns_server const &dns_server) {
 		Genode::print(output, "DNS server ", dns_server.ip(), ", ");
 	});
-	try { Genode::print(output, "DNS server from ", _dns_server_from(), ", "); }
+	_dns_domain_name.with_string([&] (Dns_domain_name::String const &str) {
+		Genode::print(output, "DNS domain name ", str, ", ");
+	});
+	try { Genode::print(output, "DNS config from ", _dns_config_from(), ", "); }
 	catch (Pointer<Domain>::Invalid) { }
 
 	Genode::print(output, "IP first ", _ip_first,
@@ -118,15 +134,17 @@ void Dhcp_server::print(Output &output) const
 }
 
 
-bool Dhcp_server::dns_servers_equal_to_those_of(Dhcp_server const &dhcp_server) const
+bool Dhcp_server::config_equal_to_that_of(Dhcp_server const &other) const
 {
-	return _dns_servers.equal_to(dhcp_server._dns_servers);
+	return _ip_lease_time.value == other._ip_lease_time.value &&
+	       _dns_servers.equal_to(other._dns_servers)          &&
+	       _dns_domain_name.equal_to(other._dns_domain_name);
 }
 
 
-Ipv4_config const &Dhcp_server::_resolve_dns_server_from() const
+Ipv4_config const &Dhcp_server::_resolve_dns_config_from() const
 {
-	return _dns_server_from().ip_config();
+	return _dns_config_from().ip_config();
 }
 
 
@@ -150,25 +168,45 @@ void Dhcp_server::alloc_ip(Ipv4_address const &ip)
 }
 
 
-void Dhcp_server::free_ip(Ipv4_address const &ip)
+void Dhcp_server::free_ip(Domain       const &domain,
+                          Ipv4_address const &ip)
 {
-	_ip_alloc.free(ip.to_uint32_little_endian() - _ip_first_raw);
+	/*
+	 * The messages in the catch directives are printed as errors and
+	 * independent from the routers verbosity configuration because the
+	 * exceptions they indicate should never be thrown.
+	 */
+	try {
+		_ip_alloc.free(ip.to_uint32_little_endian() - _ip_first_raw);
+	}
+	catch (Bit_allocator_dynamic::Out_of_indices) {
+
+		error("[", domain, "] DHCP server: out of indices while freeing IP ",
+		      ip, " (IP range: first ", _ip_first, " last ", _ip_last, ")");
+	}
+	catch (Bit_array_dynamic::Invalid_index_access) {
+
+		error("[", domain, "] DHCP server: invalid index while freeing IP ",
+		      ip, " (IP range: first ", _ip_first, " last ", _ip_last, ")");
+	}
 }
 
 
-Pointer<Domain> Dhcp_server::_init_dns_server_from(Genode::Xml_node const  node,
+Pointer<Domain> Dhcp_server::_init_dns_config_from(Genode::Xml_node const  node,
                                                    Domain_tree            &domains)
 {
-	if (!_dns_servers.empty()) {
-		return Pointer<Domain>();
-	}
-	Domain_name dns_server_from =
-		node.attribute_value("dns_server_from", Domain_name());
+	if (!_dns_servers.empty() ||
+	    _dns_domain_name.valid()) {
 
-	if (dns_server_from == Domain_name()) {
 		return Pointer<Domain>();
 	}
-	try { return domains.find_by_name(dns_server_from); }
+	Domain_name dns_config_from =
+		node.attribute_value("dns_config_from", Domain_name());
+
+	if (dns_config_from == Domain_name()) {
+		return Pointer<Domain>();
+	}
+	try { return domains.find_by_name(dns_config_from); }
 	catch (Domain_tree::No_match) { throw Invalid(); }
 }
 
@@ -178,7 +216,7 @@ bool Dhcp_server::ready() const
 	if (!_dns_servers.empty()) {
 		return true;
 	}
-	try { return _dns_server_from().ip_config().valid; }
+	try { return _dns_config_from().ip_config().valid(); }
 	catch (Pointer<Domain>::Invalid) { }
 	return true;
 }

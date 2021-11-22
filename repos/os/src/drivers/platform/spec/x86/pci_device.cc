@@ -13,10 +13,11 @@
 #include "pci_session_component.h"
 #include "pci_device_component.h"
 
-Genode::Io_port_session_capability Platform::Device_component::io_port(Genode::uint8_t const v_id)
+
+Genode::Io_port_session_capability Platform::Device_component::io_port(uint8_t const v_id)
 {
-	Genode::uint8_t const max = sizeof(_io_port_conn) / sizeof(_io_port_conn[0]);
-	Genode::uint8_t r_id = 0;
+	uint8_t const max = sizeof(_io_port_conn) / sizeof(_io_port_conn[0]);
+	uint8_t r_id = 0;
 
 	for (unsigned i = 0; i < max; ++i) {
 		Pci::Resource res = _device_config.resource(i);
@@ -33,23 +34,24 @@ Genode::Io_port_session_capability Platform::Device_component::io_port(Genode::u
 			return _io_port_conn[v_id]->cap();
 
 		try {
-			_io_port_conn[v_id] = new (_slab_ioport) Genode::Io_port_connection(_env, res.base(), res.size());
+			_io_port_conn[v_id] = new (_slab_ioport)
+				Io_port_connection(_env, res.base(), res.size());
 			return _io_port_conn[v_id]->cap();
 		} catch (...) {
-			return Genode::Io_port_session_capability();
+			return Io_port_session_capability();
 		}
 	}
 
-	return Genode::Io_port_session_capability();
+	return Io_port_session_capability();
 }
 
-Genode::Io_mem_session_capability Platform::Device_component::io_mem(Genode::uint8_t const v_id,
-                                                                     Genode::Cache_attribute const caching,
-                                                                     Genode::addr_t const offset,
-                                                                     Genode::size_t const size)
+Genode::Io_mem_session_capability Platform::Device_component::io_mem(uint8_t const v_id,
+                                                                     Cache   const caching,
+                                                                     addr_t  const offset,
+                                                                     size_t  const size)
 {
-	Genode::uint8_t max = sizeof(_io_mem) / sizeof(_io_mem[0]);
-	Genode::uint8_t r_id = 0;
+	uint8_t max = sizeof(_io_mem) / sizeof(_io_mem[0]);
+	uint8_t r_id = 0;
 
 	for (unsigned i = 0; i < max; ++i) {
 		Pci::Resource res = _device_config.resource(i);
@@ -63,42 +65,41 @@ Genode::Io_mem_session_capability Platform::Device_component::io_mem(Genode::uin
 		}
 
 		/* limit IO_MEM session size to resource size */
-		Genode::size_t const res_size = Genode::min(size, res.size());
+		size_t const res_size = min(size, res.size());
 
 		if (offset >= res.size() || offset > res.size() - res_size)
-			return Genode::Io_mem_session_capability();
+			return Io_mem_session_capability();
 
 		/* error if MEM64 resource base address above 4G on 32-bit */
 		if (res.base() > ~(addr_t)0) {
-			Genode::error("request for MEM64 resource of ", _device_config,
-			              " at ", Genode::Hex(res.base()),
-			              " not supported on 32-bit system");
-			return Genode::Io_mem_session_capability();
+			error("request for MEM64 resource of ", _device_config,
+			      " at ", Hex(res.base()), " not supported on 32-bit system");
+			return Io_mem_session_capability();
 		}
 
 		try {
-			bool const wc = caching == Genode::Cache_attribute::WRITE_COMBINED;
+			bool const wc = caching == Cache::WRITE_COMBINED;
 			Io_mem * io_mem = new (_slab_iomem) Io_mem(_env,
 			                                           res.base() + offset,
 			                                           res_size, wc);
 			_io_mem[i].insert(io_mem);
 			return io_mem->cap();
 		}
-		catch (Genode::Out_of_caps) {
-			Genode::warning("Out_of_caps in Device_component::io_mem");
+		catch (Out_of_caps) {
+			warning("Out_of_caps in Device_component::io_mem");
 			throw;
 		}
-		catch (Genode::Out_of_ram) {
-			Genode::warning("Out_of_ram in Device_component::io_mem");
+		catch (Out_of_ram) {
+			warning("Out_of_ram in Device_component::io_mem");
 			throw;
 		}
 		catch (...) {
-			Genode::warning("unhandled exception in 'Device_component::io_mem'");
-			return Genode::Io_mem_session_capability();
+			warning("unhandled exception in 'Device_component::io_mem'");
+			return Io_mem_session_capability();
 		}
 	}
 
-	return Genode::Io_mem_session_capability();
+	return Io_mem_session_capability();
 }
 
 void Platform::Device_component::config_write(unsigned char address,
@@ -112,11 +113,11 @@ void Platform::Device_component::config_write(unsigned char address,
 			if (!_device_config.reg_in_use(_config_access, address, size))
 				break;
 
-			Genode::error(_device_config, " write access to "
-			              "address=", Genode::Hex(address), " "
-			              "value=",   Genode::Hex(value),   " "
-			              "size=",    Genode::Hex(size),    " "
-			              "denied - it is used by the platform driver.");
+			error(_device_config, " write access to "
+			      "address=", Hex(address), " "
+			      "value=",   Hex(value),   " "
+			      "size=",    Hex(size),    " "
+			      "denied - it is used by the platform driver.");
 			return;
 		case Device_config::PCI_CMD_REG: /* COMMAND register - first byte */
 			if (size == Access_size::ACCESS_16BIT)
@@ -128,11 +129,11 @@ void Platform::Device_component::config_write(unsigned char address,
 				break;
 			[[fallthrough]];
 		default:
-			Genode::warning(_device_config, " write access to "
-			                "address=", Genode::Hex(address), " "
-			                "value=",   Genode::Hex(value),   " "
-			                "size=",    Genode::Hex(size),    " "
-			                "got dropped");
+			warning(_device_config, " write access to "
+			        "address=", Hex(address), " "
+			        "value=",   Hex(value),   " "
+			        "size=",    Hex(size),    " "
+			        "got dropped");
 			return;
 	}
 
@@ -144,24 +145,22 @@ void Platform::Device_component::config_write(unsigned char address,
 		catch (Out_of_ram)  { throw; }
 		catch (Out_of_caps) { throw; }
 		catch (...) {
-			Genode::error("assignment to device failed");
+			error("assignment to device failed");
 		}
-		_enabled_bus_master = true;
+		_device_used = true;
 	}
 
 	_device_config.write(_config_access, address, value, size,
 	                     _device_config.DONT_TRACK_ACCESS);
 }
 
-Genode::Irq_session_capability Platform::Device_component::irq(Genode::uint8_t id)
+Genode::Irq_session_capability Platform::Device_component::irq(uint8_t id)
 {
 	if (id != 0)
-		return Genode::Irq_session_capability();
+		return Irq_session_capability();
 
 	if (_irq_session)
 		return _irq_session->cap();
-
-	using Genode::construct_at;
 
 	if (!_device_config.valid()) {
 		/* Non PCI devices */
@@ -174,12 +173,13 @@ Genode::Irq_session_capability Platform::Device_component::irq(Genode::uint8_t i
 		return _irq_session->cap();
 	}
 
-	Genode::uint16_t const msi_cap = _msi_cap();
-	Genode::uint16_t const msix_cap = _msix_cap();
-
+	uint16_t const msi_cap  = _msi_cap();
+	uint16_t const msix_cap = _msix_cap();
+	bool const try_msi_msix = (_session.msi_usage()  && msi_cap) ||
+	                          (_session.msix_usage() && msix_cap);
 	_irq_session = construct_at<Irq_session_component>(_mem_irq_component,
 	                                                   _configure_irq(_irq_line, msi_cap, msix_cap),
-	                                                   (!_session.msi_usage() || (!msi_cap && !msix_cap)) ? ~0UL : _config_space,
+	                                                   try_msi_msix ? _config_space : ~0UL,
 	                                                   _env, _global_heap);
 	_env.ep().rpc_ep().manage(_irq_session);
 
@@ -187,74 +187,65 @@ Genode::Irq_session_capability Platform::Device_component::irq(Genode::uint8_t i
 	bool msi_used = false;
 
 	if (_irq_session->msi()) {
-		if (msix_cap)
+		if (_session.msix_usage() && msix_cap)
 			msix_used = _setup_msix(msix_cap);
 		if (!msix_used && msi_cap)
 			msi_used = _setup_msi(msi_cap);
 	}
 
 	if (_irq_session->msi())
-		Genode::log(_device_config, " uses ",
-		            msix_used ? "MSI-X " : "",
-		            (msix_used && msi_cap) ? "(supports MSI) " : "",
-		            msi_used ? "MSI ": "",
-		            (msi_used && msix_cap) ? "(supports MSI-X) " : "",
-		            (!msi_used && !msix_used) ? "no MSI/-X/IRQ " : "",
-		            "vector ", Genode::Hex(_irq_session->msi_data()), ", "
-		            "address ", Genode::Hex(_irq_session->msi_address()));
+		log(_device_config, " uses ",
+		    msix_used ? "MSI-X " : "",
+		    (msix_used && msi_cap) ? "(supports MSI) " : "",
+		    msi_used ? "MSI ": "",
+		    (msi_used && msix_cap) ? "(supports MSI-X) " : "",
+		    (!msi_used && !msix_used) ? "no MSI/-X/IRQ " : "",
+		    "vector ", Hex(_irq_session->msi_data()), ", "
+		    "address ", Hex(_irq_session->msi_address()));
 	else
-		Genode::log(_device_config, " uses IRQ, vector ",
-		            Genode::Hex(_irq_line),
-		            (msi_cap || msix_cap) ? ", supports:" : "",
-		            msi_cap ? " MSI" : "",
-		            msix_cap ? " MSI-X" : "");
+		log(_device_config, " uses IRQ, vector ",
+		    Hex(_irq_line),
+		    (msi_cap || msix_cap) ? ", supports:" : "",
+		    msi_cap ? " MSI" : "",
+		    msix_cap ? " MSI-X" : "");
 
 	return _irq_session->cap();
 }
 
-bool Platform::Device_component::_setup_msi(Genode::uint16_t const msi_cap)
+bool Platform::Device_component::_setup_msi(uint16_t const msi_cap)
 {
 	try {
 		addr_t const msi_address = _irq_session->msi_address();
 		uint32_t const msi_value = _irq_session->msi_data();
 
-		uint16_t msi = _device_config.read(_config_access,
-		                                   msi_cap + 2,
-		                                   Platform::Device::ACCESS_16BIT);
+		uint16_t msi = _read_config_16(msi_cap + 2);
 
-		_device_config.write(_config_access, msi_cap + 0x4, msi_address,
-		                     Platform::Device::ACCESS_32BIT);
+		_write_config_32(msi_cap + 0x4, msi_address);
 
 		if (msi & CAP_MSI_64) {
 			uint32_t upper_address = sizeof(msi_address) > 4
 			                       ? uint64_t(msi_address) >> 32
 			                       : 0UL;
 
-			_device_config.write(_config_access, msi_cap + 0x8,
-			                     upper_address,
-			                     Platform::Device::ACCESS_32BIT);
-			_device_config.write(_config_access, msi_cap + 0xc,
-			                     msi_value,
-			                     Platform::Device::ACCESS_16BIT);
+			_write_config_16(msi_cap + 0x8, upper_address);
+			_write_config_16(msi_cap + 0xc, msi_value);
 		} else
-			_device_config.write(_config_access, msi_cap + 0x8, msi_value,
-			                     Platform::Device::ACCESS_16BIT);
+			_write_config_16(msi_cap + 0x8, msi_value);
 
 		/* enable MSI */
 		_device_config.write(_config_access, msi_cap + 2,
 		                     msi ^ MSI_ENABLED,
 		                     Platform::Device::ACCESS_8BIT);
 
-		msi = _device_config.read(_config_access,
-		                          msi_cap + 2,
-		                          Platform::Device::ACCESS_16BIT);
+		msi = _read_config_16(msi_cap + 2);
+
 		return msi & MSI_ENABLED;
 	} catch (...) { }
 
 	return false;
 }
 
-bool Platform::Device_component::_setup_msix(Genode::uint16_t const msix_cap)
+bool Platform::Device_component::_setup_msix(uint16_t const msix_cap)
 {
 	try {
 		struct Table_pba : Register<32>
@@ -266,16 +257,11 @@ bool Platform::Device_component::_setup_msix(Genode::uint16_t const msix_cap)
 		addr_t const msi_address = _irq_session->msi_address();
 		uint32_t const msi_value = _irq_session->msi_data();
 
-		uint16_t ctrl = _device_config.read(_config_access,
-		                                    msix_cap + 2,
-		                                    Platform::Device::ACCESS_16BIT);
-
-		uint32_t const table = _device_config.read(_config_access,
-		                                           msix_cap + 4,
-		                                           Platform::Device::ACCESS_32BIT);
+		uint16_t ctrl = _read_config_16(msix_cap + 2);
 
 		uint32_t const slots = Msix_ctrl::Slots::get(ctrl) + 1;
 
+		uint32_t const table = _read_config_32(msix_cap + 4);
 		uint8_t  const table_bir = Table_pba::Bir::masked(table);
 		uint32_t const table_off = Table_pba::Offset::masked(table);
 
@@ -289,10 +275,10 @@ bool Platform::Device_component::_setup_msix(Genode::uint16_t const msix_cap)
 		if (slots * SIZEOF_MSI_TABLE_ENTRY > SIZE_IOMEM)
 			return false;
 
-		Genode::uint64_t const msix_table_phys = res.base() + table_off;
+		uint64_t const msix_table_phys = res.base() + table_off;
 
 		apply_msix_table(res, msix_table_phys, SIZE_IOMEM,
-		                 [&](Genode::addr_t const msix_table)
+		                 [&](addr_t const msix_table)
 		{
 			struct Msi_entry : public Mmio {
 				Msi_entry(addr_t const base) : Mmio(base) { }
@@ -320,19 +306,18 @@ bool Platform::Device_component::_setup_msix(Genode::uint16_t const msix_cap)
 			/* enable MSI-X */
 			Msix_ctrl::Fmask::set(ctrl, 0);
 			Msix_ctrl::Enable::set(ctrl, 1);
-			_device_config.write(_config_access, msix_cap + 2, ctrl,
-			                     Platform::Device::ACCESS_16BIT);
+			_write_config_16(msix_cap + 2, ctrl);
 		});
 
 		/* check back that MSI-X got enabled */
-		ctrl = _device_config.read(_config_access, msix_cap + 2,
-		                           Platform::Device::ACCESS_16BIT);
+		ctrl = _read_config_16(msix_cap + 2);
+
 		return Msix_ctrl::Enable::get(ctrl);
-	} catch (Genode::Out_of_caps) {
-		Genode::warning("Out_of_caps during MSI-X enablement"); }
-	catch (Genode::Out_of_ram) {
-		Genode::warning("Out_of_ram during MSI-X enablement"); }
-	catch (...) { Genode::warning("MSI-X enablement failed"); }
+	} catch (Out_of_caps) {
+		warning("Out_of_caps during MSI-X enablement"); }
+	catch (Out_of_ram) {
+		warning("Out_of_ram during MSI-X enablement"); }
+	catch (...) { warning("MSI-X enablement failed"); }
 
 	return false;
 }

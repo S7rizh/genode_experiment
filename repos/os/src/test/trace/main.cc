@@ -28,10 +28,11 @@ struct Test_thread : Thread
 {
 	Env               &env;
 	Timer::Connection  timer { env };
+	bool               stop  { false };
 
 	void entry() override
 	{
-		for (unsigned i = 0; ; i++) {
+		for (unsigned i = 0; !stop; i++) {
 			if (i & 0x3) {
 				Ram_dataspace_capability ds_cap = env.ram().alloc(1024);
 				env.ram().free(ds_cap);
@@ -42,6 +43,13 @@ struct Test_thread : Thread
 
 	Test_thread(Env &env, Name &name)
 	: Thread(env, name, 1024 * sizeof(addr_t)), env(env) { start(); }
+
+	~Test_thread()
+	{
+		stop = true;
+		this->join();
+	}
+
 };
 
 
@@ -196,6 +204,7 @@ struct Test_tracing
 	typedef Genode::String<64> String;
 	String policy_label  { };
 	String policy_module { };
+	String policy_thread { };
 
 	Rom_dataspace_capability  policy_module_rom_ds { };
 
@@ -226,12 +235,15 @@ struct Test_tracing
 
 	Test_tracing(Env &env) : env(env)
 	{
+		enum { MAX_SUBJECTS = 128 };
+
 		log("test Tracing");
 
 		try {
 			Xml_node policy = config.xml().sub_node("trace_policy");
 			policy.attribute("label").value(policy_label);
 			policy.attribute("module").value(policy_module);
+			policy.attribute("thread").value(policy_thread);
 
 			Rom_connection policy_rom(env, policy_module.string());
 			policy_module_rom_ds = policy_rom.dataspace();
@@ -259,12 +271,15 @@ struct Test_tracing
 		}
 
 		/* wait some time before querying the subjects */
-		timer.msleep(3000);
+		timer.msleep(1500);
 
-		Trace::Subject_id subjects[32];
-		size_t num_subjects = trace.subjects(subjects, 32);
+		Trace::Subject_id subjects[MAX_SUBJECTS];
+		size_t num_subjects = trace.subjects(subjects, MAX_SUBJECTS);
 
 		log(num_subjects, " tracing subjects present");
+
+		if (num_subjects == MAX_SUBJECTS)
+			error("Seems we reached the maximum number of subjects.");
 
 		auto print_info = [this] (Trace::Subject_id id, Trace::Subject_info info) {
 
@@ -281,12 +296,20 @@ struct Test_tracing
 
 		for_each_subject(subjects, num_subjects, print_info);
 
+		auto check_untraced = [this] (Trace::Subject_id id, Trace::Subject_info info) {
+
+			if (info.state() != Trace::Subject_info::UNTRACED)
+				error("Subject ", id.id, " is not UNTRACED");
+		};
+
+		for_each_subject(subjects, num_subjects, check_untraced);
+
 		/* enable tracing for test-thread */
 		auto enable_tracing = [this, &env] (Trace::Subject_id id,
 		                                    Trace::Subject_info info) {
 
 			if (   info.session_label() != policy_label
-			    || info.thread_name()   != "test-thread") {
+			    || info.thread_name()   != policy_thread) {
 				return;
 			}
 
@@ -309,7 +332,7 @@ struct Test_tracing
 		for_each_subject(subjects, num_subjects, enable_tracing);
 
 		/* give the test thread some time to run */
-		timer.msleep(3000);
+		timer.msleep(1000);
 
 		for_each_subject(subjects, num_subjects, print_info);
 
@@ -317,9 +340,10 @@ struct Test_tracing
 		if (test_monitor.constructed()) {
 			test_monitor->dump();
 			test_monitor.destruct();
+			log("passed Tracing test");
 		}
-
-		log("passed Tracing test");
+		else
+			error("Thread '", policy_thread, "' not found for session ", policy_label);
 	}
 };
 

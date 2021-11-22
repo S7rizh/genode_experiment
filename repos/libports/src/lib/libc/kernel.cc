@@ -19,6 +19,9 @@
 Libc::Kernel * Libc::Kernel::_kernel_ptr;
 
 
+extern char **environ;
+
+
 /**
  * Blockade for main context
  */
@@ -346,6 +349,9 @@ void Libc::Kernel::_clone_state_from_parent()
 	_cloned_heap_ranges.for_each([&] (Cloned_malloc_heap_range &heap_range) {
 		heap_range.import_content(*_clone_connection); });
 
+	/* value of global environ pointer (the env vars are already on the heap) */
+	_clone_connection->memory_content(&environ, sizeof(environ));
+
 	/* fetch user contex of the parent's application */
 	_clone_connection->memory_content(&_user_context, sizeof(_user_context));
 	_clone_connection->memory_content(&_main_monitor_job, sizeof(_main_monitor_job));
@@ -455,7 +461,7 @@ Libc::Kernel::Kernel(Genode::Env &env, Genode::Allocator &heap)
 
 	init_semaphore_support(_timer_accessor);
 	init_pthread_support(*this, _timer_accessor);
-	init_pthread_support(env.cpu(), _pthread_config());
+	init_pthread_support(env.cpu(), _pthread_config(), _heap);
 
 	_env.ep().register_io_progress_handler(*this);
 

@@ -12,6 +12,34 @@
 		</xs:restriction>
 	</xs:simpleType><!-- Domain_name -->
 
+	<xs:simpleType name="Dns_domain_name">
+		<xs:restriction base="xs:string">
+			<xs:minLength value="1"/>
+		</xs:restriction>
+	</xs:simpleType><!-- Dns_domain_name -->
+
+	<xs:simpleType name="Icmp_type_3_code_attribute">
+		<xs:restriction base="xs:string">
+			<xs:enumeration value="no" />
+			<xs:enumeration value="0" />
+			<xs:enumeration value="1" />
+			<xs:enumeration value="2" />
+			<xs:enumeration value="3" />
+			<xs:enumeration value="4" />
+			<xs:enumeration value="5" />
+			<xs:enumeration value="6" />
+			<xs:enumeration value="7" />
+			<xs:enumeration value="8" />
+			<xs:enumeration value="9" />
+			<xs:enumeration value="10" />
+			<xs:enumeration value="11" />
+			<xs:enumeration value="12" />
+			<xs:enumeration value="13" />
+			<xs:enumeration value="14" />
+			<xs:enumeration value="15" />
+		</xs:restriction>
+	</xs:simpleType><!-- Icmp_type_3_code_attribute -->
+
 	<xs:simpleType name="Nr_of_ports">
 		<xs:restriction base="xs:integer">
 			<xs:minInclusive value="1"/>
@@ -65,6 +93,7 @@
 						<xs:attribute name="link_state_triggers" type="Boolean" />
 						<xs:attribute name="quota"               type="Boolean" />
 						<xs:attribute name="interval_sec"        type="Seconds" />
+						<xs:attribute name="dropped_fragm_ipv4"  type="Boolean" />
 					</xs:complexType>
 				</xs:element><!-- report -->
 
@@ -84,12 +113,12 @@
 					</xs:complexType>
 				</xs:element><!-- policy -->
 
-				<xs:element name="uplink">
+				<xs:element name="nic-client">
 					<xs:complexType>
 						<xs:attribute name="label"  type="Session_label" />
 						<xs:attribute name="domain" type="Domain_name" />
 					</xs:complexType>
-				</xs:element><!-- uplink -->
+				</xs:element><!-- nic-client -->
 
 				<xs:element name="domain">
 					<xs:complexType>
@@ -117,11 +146,17 @@
 											</xs:complexType>
 										</xs:element><!-- dns-server -->
 
+										<xs:element name="dns-domain">
+											<xs:complexType>
+												<xs:attribute name="name" type="Dns_domain_name" />
+											</xs:complexType>
+										</xs:element><!-- dns-domain -->
+
 									</xs:choice>
 									<xs:attribute name="ip_first"          type="Ipv4_address" />
 									<xs:attribute name="ip_last"           type="Ipv4_address" />
 									<xs:attribute name="ip_lease_time_sec" type="Seconds" />
-									<xs:attribute name="dns_server_from"   type="Domain_name" />
+									<xs:attribute name="dns_config_from"   type="Domain_name" />
 								</xs:complexType>
 							</xs:element><!-- dhcp-server -->
 
@@ -143,20 +178,21 @@
 				</xs:element><!-- domain -->
 
 			</xs:choice>
-			<xs:attribute name="max_packets_per_signal"    type="xs:nonNegativeInteger" />
-			<xs:attribute name="verbose"                   type="Boolean" />
-			<xs:attribute name="verbose_packets"           type="Boolean" />
-			<xs:attribute name="verbose_packet_drop"       type="Boolean" />
-			<xs:attribute name="verbose_domain_state"      type="Boolean" />
-			<xs:attribute name="dhcp_discover_timeout_sec" type="Seconds" />
-			<xs:attribute name="dhcp_request_timeout_sec"  type="Seconds" />
-			<xs:attribute name="dhcp_offer_timeout_sec"    type="Seconds" />
-			<xs:attribute name="udp_idle_timeout_sec"      type="Seconds" />
-			<xs:attribute name="tcp_idle_timeout_sec"      type="Seconds" />
-			<xs:attribute name="icmp_idle_timeout_sec"     type="Seconds" />
-			<xs:attribute name="tcp_max_segm_lifetime_sec" type="Seconds" />
-			<xs:attribute name="icmp_echo_server"          type="Boolean" />
-			<xs:attribute name="ld_verbose"                type="Boolean" />
+			<xs:attribute name="max_packets_per_signal"         type="xs:nonNegativeInteger" />
+			<xs:attribute name="verbose"                        type="Boolean" />
+			<xs:attribute name="verbose_packets"                type="Boolean" />
+			<xs:attribute name="verbose_packet_drop"            type="Boolean" />
+			<xs:attribute name="verbose_domain_state"           type="Boolean" />
+			<xs:attribute name="dhcp_discover_timeout_sec"      type="Seconds" />
+			<xs:attribute name="dhcp_request_timeout_sec"       type="Seconds" />
+			<xs:attribute name="dhcp_offer_timeout_sec"         type="Seconds" />
+			<xs:attribute name="udp_idle_timeout_sec"           type="Seconds" />
+			<xs:attribute name="tcp_idle_timeout_sec"           type="Seconds" />
+			<xs:attribute name="icmp_idle_timeout_sec"          type="Seconds" />
+			<xs:attribute name="tcp_max_segm_lifetime_sec"      type="Seconds" />
+			<xs:attribute name="icmp_echo_server"               type="Boolean" />
+			<xs:attribute name="icmp_type_3_code_on_fragm_ipv4" type="Icmp_type_3_code_attribute" />
+			<xs:attribute name="ld_verbose"                     type="Boolean" />
 		</xs:complexType>
 	</xs:element><!-- config -->
 

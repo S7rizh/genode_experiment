@@ -15,25 +15,29 @@
 #ifndef _CORE__SPEC__ARM__CPU_SUPPORT_H_
 #define _CORE__SPEC__ARM__CPU_SUPPORT_H_
 
-/* Genode includes */
+/* base includes */
 #include <util/register.h>
 #include <cpu/cpu_state.h>
+
+/* base internal includes */
 #include <base/internal/align_at.h>
 
+/* base-hw internal includes */
 #include <hw/spec/arm/cpu.h>
 
-/* local includes */
+/* base-hw Core includes */
+#include <spec/arm/address_space_id_allocator.h>
 #include <kernel/interface_support.h>
-#include <kernel/kernel.h>
-#include <board.h>
 #include <util.h>
 
 namespace Kernel { struct Thread_fault; }
+
 
 namespace Genode {
 	using sizet_arithm_t = Genode::uint64_t;
 	struct Arm_cpu;
 }
+
 
 struct Genode::Arm_cpu : public Hw::Arm_cpu
 {
@@ -51,15 +55,23 @@ struct Genode::Arm_cpu : public Hw::Arm_cpu
 	/**
 	 * This class comprises ARM specific protection domain attributes
 	 */
-	struct Mmu_context
+	class Mmu_context
 	{
-		Cidr::access_t  cidr;
-		Ttbr0::access_t ttbr0;
+		private:
 
-		Mmu_context(addr_t page_table_base);
-		~Mmu_context();
+			Board::Address_space_id_allocator &_addr_space_id_alloc;
 
-		uint8_t id() { return cidr; }
+		public:
+
+			Cidr::access_t  cidr;
+			Ttbr0::access_t ttbr0;
+
+			Mmu_context(addr_t                             page_table_base,
+			            Board::Address_space_id_allocator &addr_space_id_alloc);
+
+			~Mmu_context();
+
+			uint8_t id() { return cidr; }
 	};
 
 	/**
@@ -68,25 +80,21 @@ struct Genode::Arm_cpu : public Hw::Arm_cpu
 	static void invalidate_instr_cache() {
 		asm volatile ("mcr p15, 0, %0, c7, c5, 0" :: "r" (0) : ); }
 
-	/**
-	 * Clean data-cache for virtual region 'base' - 'base + size'
-	 */
-	static void clean_data_cache_by_virt_region(addr_t const base,
-	                                            size_t const size);
-
-	/**
-	 * Clean and invalidate data-cache for virtual region
-	 * 'base' - 'base + size'
-	 */
-	static void clean_invalidate_data_cache_by_virt_region(addr_t const base,
-	                                                       size_t const size);
-
 	static void clear_memory_region(addr_t const addr,
 	                                size_t const size,
 	                                bool changed_cache_properties);
 
 	static void cache_coherent_region(addr_t const addr,
 	                                  size_t const size);
+
+	static void cache_clean_data_region(addr_t const base,
+	                                    size_t const size);
+
+	static void cache_clean_invalidate_data_region(addr_t const addr,
+	                                               size_t const size);
+
+	static void cache_invalidate_data_region(addr_t const addr,
+	                                         size_t const size);
 
 	/**
 	 * Invalidate TLB regarding the given address space id

@@ -1,31 +1,33 @@
 proc binary_name_ld_lib_so { } { return "ld-hw.lib.so" }
-proc binary_name_core_o    { } { return "core-hw.o"    }
+proc binary_name_core_a    { } { return "core-hw.a"    }
 proc binary_name_timer     { } { return "hw_timer_drv" }
 
 
 proc run_boot_string { } { return "\nkernel initialized" }
 
-proc bootstrap_link_address { } {
-	if {[have_spec "pbxa9"]}           { return "0x70000000" }
-	if {[have_spec "usb_armory"]}      { return "0x72000000" }
-	if {[have_spec "x86_64"]}          { return "0x00200000" }
-	if {[have_spec "wand_quad"]}       { return "0x10001000" }
-	if {[have_spec "imx6q_sabrelite"]} { return "0x10001000" }
-	if {[have_spec "imx53_qsb"]}       { return "0x70010000" }
-	if {[have_spec "imx7d_sabre"]}     { return "0x88000000" }
-	if {[have_spec "imx8q_evk"]}       { return "0x40010000" }
-	if {[have_spec "zynq"]}            { return "0x00100000" }
-	if {[have_spec "riscv"]}           { return "0x81000000" }
-	if {[have_spec "rpi"]}             { return "0x00800000" }
-	if {[have_spec "rpi3"]}            { return "0x00800000" }
-	if {[have_spec "nit6_solox"]}      { return "0x88000000" }
-	if {[have_spec "virt_qemu"]}       { return "0x40000000" }
 
-	puts "unknown platform no linker address known"
-	exit -1
+proc bootstrap_link_address { } {
+
+	set link_address_file [file join "board" [board] "image_link_address"]
+
+	set repo [repository_contains $link_address_file]
+
+	if {$repo == ""} {
+		puts stderr "\nError: unknown image link address\n"
+		puts stderr " File $link_address_file not present in any repository.\n"
+		exit -1
+	}
+
+	set fh [open [file join $repo $link_address_file] "RDONLY"]
+	set link_address [lindex [gets $fh] 0]
+	close $fh
+
+	return $link_address
 }
 
+
 proc core_link_address { } {
+
 	if {[have_spec "64bit"]} { return "0xffffffc000000000" }
 	if {[have_spec "32bit"]} { return "0x80000000" }
 	return 0;
@@ -37,13 +39,6 @@ proc core_link_address { } {
 #
 proc run_boot_dir {binaries} {
 
-	# generate static ACPI report for platform driver on Muen
-	if {[have_spec "muen"]} {
-		set fh [open "bin/acpi" "WRONLY CREAT TRUNC"]
-		puts $fh "<acpi><bdf start=\"0\" count=\"16384\" base=\"0xf8000000\"/><drhd/></acpi>"
-		close $fh
-	}
-
 	#
 	# Build bootstrap, the core object, and the dynamic linker on demand
 	#
@@ -53,16 +48,16 @@ proc run_boot_dir {binaries} {
 	set core_arg      ""
 	set ld_arg        ""
 
-	if {![file exists [run_dir]/genode/ld.lib.so]}      { set ld_arg        lib/ld/hw    }
-	if {![file exists [run_dir]/genode/core-hw.o]}      { set core_arg      core/hw      }
-	if {![file exists [run_dir]/genode/bootstrap-hw.o]} { set bootstrap_arg bootstrap/hw }
+	if {![file exists [run_dir]/genode/ld.lib.so]}              { set ld_arg        lib/ld/hw    }
+	if {![file exists [run_dir]/genode/core-hw-[board].a]}      { set core_arg      core/hw      }
+	if {![file exists [run_dir]/genode/bootstrap-hw-[board].o]} { set bootstrap_arg bootstrap/hw }
 
 	set build_args "$bootstrap_arg $core_arg $ld_arg"
 	if {[llength $build_args]} { build $build_args }
 
-	if {$ld_arg        != ""} { file copy -force bin/ld-hw.lib.so   [run_dir]/genode/ld.lib.so }
-	if {$core_arg      != ""} { file copy -force bin/core-hw-[board].o      [run_dir]/genode/core-hw.o }
-	if {$bootstrap_arg != ""} { file copy -force bin/bootstrap-hw-[board].o [run_dir]/genode/bootstrap-hw.o }
+	if {$ld_arg        != ""} { copy_file bin/ld-hw.lib.so  [run_dir]/genode/ld.lib.so }
+	if {$core_arg      != ""} { copy_file bin/core-hw-[board].a      [run_dir]/genode/ }
+	if {$bootstrap_arg != ""} { copy_file bin/bootstrap-hw-[board].o [run_dir]/genode/ }
 
 	#
 	# Copy specified modules to the run directory, excluding core.
@@ -73,12 +68,12 @@ proc run_boot_dir {binaries} {
 
 	puts "core link address is [core_link_address]"
 
-	set core_obj      core-hw.o
-	set bootstrap_obj bootstrap-hw.o
+	set core_obj      core-hw-[board].a
+	set bootstrap_obj bootstrap-hw-[board].o
 
 	# create core and bootstrap binary without modules for debugging
-	if {[file exists debug/core-hw-[board].o]} {
-		build_core debug/core-hw-[board].o         {} [run_dir].core      [core_link_address]
+	if {[file exists debug/core-hw-[board].a]} {
+		build_core debug/core-hw-[board].a         {} [run_dir].core      [core_link_address]
 		build_core [run_dir]/genode/$bootstrap_obj {} [run_dir].bootstrap [bootstrap_link_address]
 	}
 
@@ -153,12 +148,16 @@ proc run_boot_dir {binaries} {
 
 	run_image [run_dir]/boot/image.elf
 
-	# set symbolic link to image.elf file in TFTP directory for PXE boot
+	# install image.elf file in TFTP directory for PXE boot
 	if {[expr [have_spec arm] || [have_spec arm_64]] && [have_include "load/tftp"]} {
-		exec ln -sf [run_dir]/boot/image.elf [load_tftp_base_dir][load_tftp_offset_dir]
+		exec {*}[load_tftp_inst_cmd] [pwd]/[run_dir]/boot/image.elf [load_tftp_base_dir][load_tftp_offset_dir]
 
 		if {[have_include "image/uboot"]} {
-			exec ln -sf [pwd]/[run_dir]/uImage [load_tftp_base_dir][load_tftp_offset_dir]
+			exec {*}[load_tftp_inst_cmd] [pwd]/[run_dir]/uImage [load_tftp_base_dir][load_tftp_offset_dir]
+		}
+
+		if {[have_include "image/uboot_fit"]} {
+			exec {*}[load_tftp_inst_cmd] [pwd]/[run_dir]/image.itb [load_tftp_base_dir][load_tftp_offset_dir]
 		}
 	}
 
@@ -172,14 +171,8 @@ proc run_boot_dir {binaries} {
 		# Generate pulsar config file
 		#
 		set fh [open "[run_dir]/config-52-54-00-12-34-56" "WRONLY CREAT TRUNC"]
-		if {[have_spec "muen"]} {
-			exec gzip [run_dir]/image.bin
-			puts $fh " exec /boot/unzip"
-			puts $fh " load /image.bin.gz"
-		} else {
-			puts $fh " exec /boot/bender"
-			puts $fh " load /boot/image.elf"
-		}
+		puts $fh " exec /boot/bender"
+		puts $fh " load /boot/image.elf"
 		close $fh
 
 		generate_tftp_config
@@ -192,13 +185,9 @@ proc run_boot_dir {binaries} {
 		set fh [open "[run_dir]/boot.cfg" "WRONLY CREAT TRUNC"]
 		puts $fh "#!ipxe"
 
-		if {[have_spec "muen"]} {
-			puts $fh "kernel image.bin"
-		} else {
-			install_pxe_bootloader_to_run_dir
-			puts $fh "kernel boot/bender"
-			puts $fh "module boot/image.elf"
-		}
+		install_pxe_bootloader_to_run_dir
+		puts $fh "kernel boot/bender"
+		puts $fh "module boot/image.elf"
 		puts $fh "boot"
 		close $fh
 
@@ -210,25 +199,4 @@ proc run_boot_dir {binaries} {
 ##
 # Base source archive within depot
 #
-proc base_src { } {
-
-	if {[have_spec x86_64] && ![have_spec muen]}         { return base-hw-pc }
-	if {[have_spec x86_64] &&  [have_spec muen]}         { return base-hw-muen }
-	if {[have_spec pbxa9]}                               { return base-hw-pbxa9 }
-	if {[have_spec rpi]}                                 { return base-hw-rpi }
-	if {[have_spec rpi3]}                                { return base-hw-rpi3 }
-	if {[have_spec imx6q_sabrelite]}                     { return base-hw-imx6q_sabrelite }
-	if {[have_spec imx7d_sabre]}                         { return base-hw-imx7d_sabre }
-	if {[have_spec imx8q_evk]}                           { return base-hw-imx8q_evk }
-	if {[have_spec nit6_solox]}                          { return base-hw-nit6_solox }
-	if {[have_spec imx53_qsb] && ![have_spec trustzone]} { return base-hw-imx53_qsb }
-	if {[have_spec imx53_qsb] &&  [have_spec trustzone]} { return base-hw-imx53_qsb_tz }
-	if {[have_spec zynq_qemu]}                           { return base-hw-zynq_qemu }
-	if {[have_spec virt_qemu]}                           { return base-hw-virt_qemu }
-
-	global specs
-
-	puts stderr "Test requires base-hw kernel archive, which is missing for this build configuration"
-	puts stderr "  SPECS=\"$specs\""
-	exit 0
-}
+proc base_src { } { return "base-hw-[board]" }

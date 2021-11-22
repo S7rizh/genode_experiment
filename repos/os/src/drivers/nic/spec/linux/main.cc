@@ -3,21 +3,12 @@
  * \author Stefan Kalkowski
  * \author Christian Helmuth
  * \author Sebastian Sumpf
+ * \author Martin Stein
  * \date   2011-08-08
- *
- * Configuration options are:
- *
- * - TAP device to connect to (default is tap0)
- * - MAC address (default is 02-00-00-00-00-01)
- *
- * These can be set in the config section as follows:
- *  <config>
- *  	<nic mac="12:23:34:45:56:67" tap="tap1"/>
- *  </config>
  */
 
 /*
- * Copyright (C) 2011-2017 Genode Labs GmbH
+ * Copyright (C) 2011-2021 Genode Labs GmbH
  *
  * This file is part of the Genode OS framework, which is distributed
  * under the terms of the GNU Affero General Public License version 3.
@@ -30,7 +21,10 @@
 #include <base/thread.h>
 #include <base/log.h>
 #include <base/blockade.h>
-#include <nic/root.h>
+#include <os/reporter.h>
+
+/* NIC driver includes */
+#include <drivers/nic/uplink_client_base.h>
 
 /* Linux */
 #include <errno.h>
@@ -40,25 +34,25 @@
 #include <net/if.h>
 #include <linux/if_tun.h>
 
-namespace Server {
-	using namespace Genode;
 
-	struct Main;
-}
+using namespace Genode;
+
+using Tap_name    = String<IFNAMSIZ>;
+using Mac_address = Net::Mac_address;
 
 
-class Linux_session_component : public Nic::Session_component
+class Uplink_client : public Uplink_client_base
 {
 	private:
 
-		struct Rx_signal_thread : Genode::Thread
+		struct Rx_signal_thread : Thread
 		{
-			int                               fd;
-			Genode::Signal_context_capability sigh;
-			Genode::Blockade                  blockade { };
+			int                       fd;
+			Uplink_client &uplink;
+			Blockade                  blockade { };
 
-			Rx_signal_thread(Genode::Env &env, int fd, Genode::Signal_context_capability sigh)
-			: Genode::Thread(env, "rx_signal", 0x1000), fd(fd), sigh(sigh) { }
+			Rx_signal_thread(Env &env, int fd, Uplink_client &uplink)
+			: Thread(env, "rx_signal", 0x1000), fd(fd), uplink(uplink) { }
 
 			void entry() override
 			{
@@ -72,20 +66,18 @@ class Linux_session_component : public Nic::Session_component
 					do { ret = select(fd + 1, &rfds, 0, 0, 0); } while (ret < 0);
 
 					/* signal incoming packet */
-					Genode::Signal_transmitter(sigh).submit();
+					uplink._rx_handler.local_submit();
 
 					blockade.block();
 				}
 			}
 		};
 
-		Genode::Attached_rom_dataspace _config_rom;
+		int                           _tap_fd;
+		Signal_handler<Uplink_client> _rx_handler { _env.ep(), *this, &Uplink_client::_handle_rx };
+		Rx_signal_thread              _rx_thread  { _env, _tap_fd, *this };
 
-		Nic::Mac_address _mac_addr { };
-		int              _tap_fd;
-		Rx_signal_thread _rx_thread;
-
-		int _setup_tap_fd()
+		static int _init_tap_fd(Tap_name const &tap_name)
 		{
 			/* open TAP device */
 			int ret;
@@ -93,180 +85,149 @@ class Linux_session_component : public Nic::Session_component
 
 			int fd = open("/dev/net/tun", O_RDWR);
 			if (fd < 0) {
-				Genode::error("could not open /dev/net/tun: no virtual network emulation");
-				/* this error is fatal */
-				throw Genode::Exception();
+				error("could not open /dev/net/tun: no virtual network emulation");
+				throw Exception();
 			}
 
 			/* set fd to non-blocking */
 			if (fcntl(fd, F_SETFL, O_NONBLOCK) < 0) {
-				Genode::error("could not set /dev/net/tun to non-blocking");
-				throw Genode::Exception();
+				error("could not set /dev/net/tun to non-blocking");
+				throw Exception();
 			}
 
-			Genode::memset(&ifr, 0, sizeof(ifr));
+			::memset(&ifr, 0, sizeof(ifr));
 			ifr.ifr_flags = IFF_TAP | IFF_NO_PI;
 
-			/* get tap device from config */
-			try {
-				Genode::Xml_node nic_node = _config_rom.xml().sub_node("nic");
-				nic_node.attribute("tap").with_raw_value([&] (char const *ptr, size_t len) {
-					len = Genode::min(len, sizeof(ifr.ifr_name) - 1);
-					Genode::memcpy(ifr.ifr_name, ptr, len);
-					ifr.ifr_name[len] = 0;
-				});
-				Genode::log("using tap device \"", Genode::Cstring(ifr.ifr_name), "\"");
-			} catch (...) {
-				/* use tap0 if no config has been provided */
-				Genode::copy_cstring(ifr.ifr_name, "tap0", sizeof(ifr.ifr_name));
-				Genode::log("no config provided, using tap0");
-			}
+			copy_cstring(ifr.ifr_name, tap_name.string(), sizeof(ifr.ifr_name));
+			log("using tap device \"", tap_name, "\"");
 
 			ret = ioctl(fd, TUNSETIFF, (void *) &ifr);
 			if (ret != 0) {
-				Genode::error("could not configure /dev/net/tun: no virtual network emulation");
+				error("could not configure /dev/net/tun: no virtual network emulation");
 				close(fd);
 				/* this error is fatal */
-				throw Genode::Exception();
+				throw Exception();
 			}
 
 			return fd;
 		}
 
-		bool _send()
+		void _handle_rx()
 		{
-			using namespace Genode;
+			bool progress { true };
+			while (progress) {
 
-			if (!_tx.sink()->ready_to_ack())
-				return false;
+				progress = false;
+				size_t const max_pkt_size {
+					Nic::Packet_allocator::DEFAULT_PACKET_SIZE };
 
-			if (!_tx.sink()->packet_avail())
-				return false;
+				_drv_rx_handle_pkt(
+					max_pkt_size,
+					[&] (void   *conn_tx_pkt_base,
+					     size_t &adjusted_conn_tx_pkt_size)
+				{
+					long int const read_result {
+						read(_tap_fd, conn_tx_pkt_base, max_pkt_size) };
 
-			Packet_descriptor packet = _tx.sink()->get_packet();
-			if (!packet.size() || !_tx.sink()->packet_valid(packet)) {
-				warning("invalid tx packet");
-				return true;
+					if (read_result <= 0) {
+
+						_rx_thread.blockade.wakeup();
+						return Write_result::WRITE_FAILED;
+					}
+					adjusted_conn_tx_pkt_size = read_result;
+					progress = true;
+					return Write_result::WRITE_SUCCEEDED;
+				});
 			}
+		}
 
+
+		/************************
+		 ** Uplink_client_base **
+		 ************************/
+
+		Transmit_result
+		_drv_transmit_pkt(const char *conn_rx_pkt_base,
+		                  size_t      conn_rx_pkt_size) override
+		{
 			int ret;
 
 			/* non-blocking-write packet to TAP */
 			do {
-				ret = write(_tap_fd, _tx.sink()->packet_content(packet), packet.size());
+				ret = ::write(_tap_fd, conn_rx_pkt_base, conn_rx_pkt_size);
 				/* drop packet if write would block */
 				if (ret < 0 && errno == EAGAIN)
 					continue;
 
-				if (ret < 0) Genode::error("write: errno=", errno);
+				if (ret < 0) error("write: errno=", errno);
 			} while (ret < 0);
 
-			_tx.sink()->acknowledge_packet(packet);
-
-			return true;
-		}
-
-		enum class Receive_result {
-			NO_PACKET, READ_ERROR, SUBMITTED, ALLOC_FAILED, SUBMIT_QUEUE_FULL };
-
-		Receive_result _receive()
-		{
-			unsigned const max_size = Nic::Packet_allocator::DEFAULT_PACKET_SIZE;
-
-			if (!_rx.source()->ready_to_submit())
-				return Receive_result::SUBMIT_QUEUE_FULL;
-
-			Nic::Packet_descriptor p;
-			try {
-				p = _rx.source()->alloc_packet(max_size);
-			} catch (Session::Rx::Source::Packet_alloc_failed) { return Receive_result::ALLOC_FAILED; }
-
-			int size = read(_tap_fd, _rx.source()->packet_content(p), max_size);
-			if (size <= 0) {
-				_rx.source()->release_packet(p);
-				return errno == EAGAIN ? Receive_result::NO_PACKET
-				                       : Receive_result::READ_ERROR;
-			}
-
-			/* adjust packet size */
-			Nic::Packet_descriptor p_adjust(p.offset(), size);
-			_rx.source()->submit_packet(p_adjust);
-
-			return Receive_result::SUBMITTED;
-		}
-
-	protected:
-
-		bool _handle_incoming_packets()
-		{
-			while (true) {
-				switch (_receive()) {
-				case Receive_result::NO_PACKET:         return true;
-				case Receive_result::READ_ERROR:        return true;
-				case Receive_result::SUBMITTED:         continue;
-				case Receive_result::ALLOC_FAILED:      return false;
-				case Receive_result::SUBMIT_QUEUE_FULL: return false;
-				}
-			}
-		}
-
-		void _handle_packet_stream() override
-		{
-			while (_rx.source()->ack_avail()) {
-				_rx.source()->release_packet(_rx.source()->get_acked_packet());
-			}
-
-			while (_send()) ;
-
-			if (_handle_incoming_packets())
-				_rx_thread.blockade.wakeup();
+			return Transmit_result::ACCEPTED;
 		}
 
 	public:
 
-		Linux_session_component(Genode::size_t const tx_buf_size,
-		                        Genode::size_t const rx_buf_size,
-		                        Genode::Allocator   &rx_block_md_alloc,
-		                        Server::Env         &env)
+		Uplink_client(Env               &env,
+		              Allocator         &alloc,
+		              Tap_name    const &tap_name,
+		              Mac_address const &mac_address)
 		:
-			Session_component(tx_buf_size, rx_buf_size, Genode::CACHED, rx_block_md_alloc, env),
-			_config_rom(env, "config"),
-			_tap_fd(_setup_tap_fd()), _rx_thread(env, _tap_fd, _packet_stream_dispatcher)
+			Uplink_client_base { env, alloc, mac_address },
+			_tap_fd { _init_tap_fd(tap_name) }
 		{
-			/* fall back to fake MAC address (unicast, locally managed) */
-			_mac_addr.addr[0] = 0x02;
-			_mac_addr.addr[1] = 0x00;
-			_mac_addr.addr[2] = 0x00;
-			_mac_addr.addr[3] = 0x00;
-			_mac_addr.addr[4] = 0x00;
-			_mac_addr.addr[5] = 0x01;
-
-			/* try using configured MAC address */
-			try {
-				Genode::Xml_node nic_config = _config_rom.xml().sub_node("nic");
-				_mac_addr = nic_config.attribute_value("mac", _mac_addr);
-				Genode::log("Using configured MAC address ", _mac_addr);
-			} catch (...) { }
-
+			_drv_handle_link_state(true);
 			_rx_thread.start();
 		}
-
-	bool link_state() override              { return true; }
-	Nic::Mac_address mac_address() override { return _mac_addr; }
 };
 
 
-struct Server::Main
+struct Main
 {
-	Env  &_env;
-	Heap  _heap { _env.ram(), _env.rm() };
+	Env                   &_env;
+	Heap                   _heap       { _env.ram(), _env.rm() };
+	Attached_rom_dataspace _config_rom { _env, "config" };
 
-	Nic::Root<Linux_session_component> nic_root { _env, _heap };
+	Tap_name _tap_name {
+		_config_rom.xml().attribute_value("tap", Tap_name("tap0")) };
+
+	static Mac_address _default_mac_address()
+	{
+		Mac_address mac_addr { (uint8_t)0 };
+
+		mac_addr.addr[0] = 0x02; /* unicast, locally managed MAC address */
+		mac_addr.addr[5] = 0x01; /* arbitrary index */
+
+		return mac_addr;
+	}
+
+	Mac_address _mac_address {
+		_config_rom.xml().attribute_value("mac", _default_mac_address()) };
+
+	Uplink_client _uplink { _env, _heap, _tap_name, _mac_address };
+
+	Constructible<Reporter> _reporter { };
 
 	Main(Env &env) : _env(env)
 	{
-		_env.parent().announce(_env.ep().manage(nic_root));
+		_config_rom.xml().with_sub_node("report", [&] (Xml_node const &xml) {
+			bool const report_mac_address =
+				xml.attribute_value("mac_address", false);
+
+			if (!report_mac_address)
+				return;
+
+			_reporter.construct(_env, "devices");
+			_reporter->enabled(true);
+
+			Reporter::Xml_generator report(*_reporter, [&] () {
+				report.node("nic", [&] () {
+					report.attribute("label", _tap_name);
+					report.attribute("mac_address", String<32>(_mac_address));
+				});
+			});
+		});
 	}
 };
 
-void Component::construct(Genode::Env &env) { static Server::Main main(env); }
+
+void Component::construct(Env &env) { static Main main(env); }

@@ -1,33 +1,39 @@
 /*
- * \brief  Linux kernel API
- * \author Norman Feske
- * \author Sebastian Sumpf
- * \author Josef Soentgen
- * \date   2014-08-21
- *
- * Based on the prototypes found in the Linux kernel's 'include/'.
+ * \brief  Lx_emul support for interrupts
+ * \author Stefan Kalkowski
+ * \date   2021-04-14
  */
 
 /*
- * Copyright (C) 2014-2017 Genode Labs GmbH
+ * Copyright (C) 2021 Genode Labs GmbH
  *
  * This file is distributed under the terms of the GNU General Public License
  * version 2.
  */
 
-/***********************
- ** linux/irqreturn.h **
- ***********************/
+#ifndef _LX_EMUL__IRQ_H_
+#define _LX_EMUL__IRQ_H_
 
-typedef enum irqreturn {
-	IRQ_NONE        = 0,
-	IRQ_HANDLED     = 1,
-	IRQ_WAKE_THREAD = 2,
-} irqreturn_t;
+#ifdef __cplusplus
+extern "C" {
+#endif
 
+struct irq_desc;
 
-/***********************
- ** linux/interrupt.h **
- ***********************/
+void lx_emul_irq_unmask(unsigned int irq);
 
-typedef irqreturn_t (*irq_handler_t)(int, void *);
+void lx_emul_irq_mask(unsigned int irq);
+
+void lx_emul_irq_eoi(unsigned int irq);
+
+int lx_emul_irq_task_function(void * data);
+
+extern void * lx_emul_irq_task_struct;
+
+unsigned int lx_emul_irq_last(void);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* _LX_EMUL__IRQ_H_ */

@@ -20,6 +20,7 @@ using Driver::Session_component;
 
 void Session_component::produce_xml(Xml_generator &xml)
 {
+	if (!_info) { return; }
 	for (Device_list_element * e = _device_list.first(); e; e = e->next()) {
 		e->object()->report(xml); }
 }
@@ -74,8 +75,8 @@ Genode::Rom_session_capability Session_component::devices_rom() {
 	return _rom_session.cap(); }
 
 
-Platform::Device_capability
-Session_component::acquire_device(Platform::Session::String const &name)
+Genode::Capability<Platform::Device_interface>
+Session_component::acquire_device(Platform::Session::Device_name const &name)
 {
 	for (Device_list_element * e = _device_list.first(); e; e = e->next()) {
 		if (e->object()->device() != name.string()) { continue; }
@@ -92,11 +93,21 @@ Session_component::acquire_device(Platform::Session::String const &name)
 		return _env.env.ep().rpc_ep().manage(e->object());
 	}
 
-	return Platform::Device_capability();
+	return Capability<Platform::Device_interface>();
 }
 
 
-void Session_component::release_device(Platform::Device_capability device_cap)
+Genode::Capability<Platform::Device_interface>
+Session_component::acquire_single_device()
+{
+	Device_list_element * e = _device_list.first();
+	if (!e) { return Capability<Platform::Device_interface>(); }
+
+	return acquire_device(e->object()->device());
+}
+
+
+void Session_component::release_device(Capability<Platform::Device_interface> device_cap)
 {
 	_env.env.ep().rpc_ep().apply(device_cap, [&] (Device_component * dc) {
 		_env.env.ep().rpc_ep().dissolve(dc);
@@ -107,9 +118,9 @@ void Session_component::release_device(Platform::Device_capability device_cap)
 
 
 Genode::Ram_dataspace_capability
-Session_component::alloc_dma_buffer(size_t const size)
+Session_component::alloc_dma_buffer(size_t const size, Cache cache)
 {
-	Ram_dataspace_capability ram_cap = _env_ram.alloc(size, UNCACHED);
+	Ram_dataspace_capability ram_cap = _env_ram.alloc(size, cache);
 
 	if (!ram_cap.valid()) return ram_cap;
 
@@ -143,7 +154,7 @@ void Session_component::free_dma_buffer(Ram_dataspace_capability ram_cap)
 }
 
 
-Genode::addr_t Session_component::bus_addr_dma_buffer(Ram_dataspace_capability ram_cap)
+Genode::addr_t Session_component::dma_addr(Ram_dataspace_capability ram_cap)
 {
 	if (!ram_cap.valid()) { return 0; }
 
@@ -163,11 +174,12 @@ Session_component::Session_component(Driver::Env       & env,
                                      Session_registry  & registry,
                                      Label       const & label,
                                      Resources   const & resources,
-                                     Diag        const & diag)
+                                     Diag        const & diag,
+                                     bool        const   info)
 : Session_object<Platform::Session>(env.env.ep(), resources, label, diag),
   Session_registry::Element(registry, *this),
   Dynamic_rom_session::Xml_producer("devices"),
-  _env(env)
+  _env(env), _info(info)
 {
 	/*
 	 * FIXME: As the ROM session does not propagate Out_of_*

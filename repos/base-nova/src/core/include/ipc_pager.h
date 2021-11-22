@@ -19,50 +19,38 @@
 #include <base/ipc.h>
 #include <base/stdint.h>
 
+/* core-local includes */
+#include <mapping.h>
+
 /* NOVA includes */
 #include <nova/syscalls.h>
 
-namespace Genode {
-	class Mapping;
-	class Ipc_pager;
+namespace Genode { class Ipc_pager; }
+
+
+namespace Genode { enum { PAGE_SIZE_LOG2 = 12 }; }
+
+
+static inline Nova::Rights nova_map_rights(Genode::Mapping const &mapping)
+{
+	return Nova::Rights(true, mapping.writeable, mapping.executable);
 }
 
-class Genode::Mapping
+
+static inline Nova::Mem_crd nova_src_crd(Genode::Mapping const &mapping)
 {
-	private:
+	return Nova::Mem_crd(mapping.src_addr >> Genode::PAGE_SIZE_LOG2,
+	                     mapping.size_log2 - Genode::PAGE_SIZE_LOG2,
+	                     nova_map_rights(mapping));
+}
 
-		addr_t          const _dst_addr;
-		Cache_attribute const _attr;
-		Nova::Mem_crd   const _mem_crd;
 
-		enum { PAGE_SIZE_LOG2 = 12 };
-
-	public:
-
-		/**
-		 * Constructor
-		 */
-		Mapping(addr_t dst_addr, addr_t source_addr,
-		        Cache_attribute c, bool /* io_mem */,
-		        unsigned size_log2,
-		        bool writeable, bool executable)
-		:
-			_dst_addr(dst_addr),
-			_attr(c),
-			_mem_crd(source_addr >> PAGE_SIZE_LOG2,
-			         size_log2 - PAGE_SIZE_LOG2,
-			         Nova::Rights(true, writeable, executable))
-		{ }
-
-		void prepare_map_operation() { }
-
-		Nova::Mem_crd mem_crd() const { return _mem_crd; }
-
-		bool dma() { return _attr != CACHED; };
-		bool write_combined() { return _attr == WRITE_COMBINED; };
-
-		addr_t dst_addr() { return _dst_addr; }
-};
+static inline Nova::Mem_crd nova_dst_crd(Genode::Mapping const &mapping)
+{
+	return Nova::Mem_crd(mapping.dst_addr >> Genode::PAGE_SIZE_LOG2,
+	                     mapping.size_log2 - Genode::PAGE_SIZE_LOG2,
+	                     nova_map_rights(mapping));
+}
 
 
 class Genode::Ipc_pager

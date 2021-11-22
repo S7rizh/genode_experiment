@@ -1,16 +1,29 @@
-MIRROR_FROM_REP_DIR := lib/mk/egl.mk \
-                       lib/mk/egl_i965.mk \
-                       lib/mk/egl_swrast.mk \
+MIRROR_FROM_REP_DIR := \
+                       lib/mk/egl.mk \
+                       lib/mk/mesa_gpu-etnaviv.mk \
+                       lib/mk/mesa_gpu-softpipe.mk \
+                       lib/mk/etnaviv.mk \
+                       lib/mk/iris_gen.inc \
+                       lib/mk/isl_gen.inc \
                        lib/mk/glapi.mk \
-                       lib/mk/i965.mk \
                        lib/mk/mesa.inc \
                        lib/mk/mesa_api.mk \
                        lib/mk/mesa-common.inc \
-                       lib/mk/spec/arm/mesa.mk \
-                       lib/mk/spec/arm_64/mesa.mk \
-                       lib/mk/spec/x86_32/mesa.mk \
+                       lib/mk/softpipe.mk \
+                       lib/mk/spec/arm_v8/mesa.mk \
+                       lib/mk/spec/x86/mesa_gpu-iris.mk \
+                       lib/mk/spec/x86/iris.mk \
+                       lib/mk/spec/x86/iris_gen110.mk \
+                       lib/mk/spec/x86/iris_gen120.mk \
+                       lib/mk/spec/x86/iris_gen125.mk \
+                       lib/mk/spec/x86/iris_gen80.mk \
+                       lib/mk/spec/x86/iris_gen90.mk \
+                       lib/mk/spec/x86/isl_gen110.mk \
+                       lib/mk/spec/x86/isl_gen120.mk \
+                       lib/mk/spec/x86/isl_gen125.mk \
+                       lib/mk/spec/x86/isl_gen80.mk \
+                       lib/mk/spec/x86/isl_gen90.mk \
                        lib/mk/spec/x86_64/mesa.mk \
-                       lib/mk/swrast.mk \
                        src/lib/mesa
 
 content: $(MIRROR_FROM_REP_DIR) src/lib/mesa/target.mk
@@ -24,7 +37,7 @@ src/lib/mesa/target.mk:
 
 PORT_DIR := $(call port_dir,$(REP_DIR)/ports/mesa)
 
-MIRROR_FROM_PORT_DIR := src/lib/mesa/src \
+MIRROR_FROM_PORT_DIR := src/lib/mesa/src generated \
 
 content: $(MIRROR_FROM_PORT_DIR)
 
@@ -35,4 +48,4 @@ $(MIRROR_FROM_PORT_DIR):
 content: LICENSE
 
 LICENSE:
-	cp $(PORT_DIR)/src/lib/mesa/docs/COPYING $@
+	cp $(PORT_DIR)/src/lib/mesa/docs/license.rst $@

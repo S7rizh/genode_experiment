@@ -14,7 +14,6 @@
 #include <platform_pd.h>
 
 #include <kernel/cpu.h>
-#include <kernel/kernel.h>
 #include <kernel/pd.h>
 #include <kernel/thread.h>
 
@@ -24,6 +23,7 @@ extern "C" void kernel_to_user_context_switch(void *, void *);
 
 using namespace Kernel;
 
+
 void Thread::exception(Cpu & cpu)
 {
 	switch (regs->exception_type) {
@@ -32,7 +32,7 @@ void Thread::exception(Cpu & cpu)
 	case Cpu::IRQ_LEVEL_EL1: [[fallthrough]];
 	case Cpu::FIQ_LEVEL_EL0: [[fallthrough]];
 	case Cpu::FIQ_LEVEL_EL1:
-		_interrupt(cpu.id());
+		_interrupt(_user_irq_pool, cpu.id());
 		return;
 	case Cpu::SYNC_LEVEL_EL0: [[fallthrough]];
 	case Cpu::SYNC_LEVEL_EL1:
@@ -103,36 +103,6 @@ bool Kernel::Pd::invalidate_tlb(Cpu &, addr_t addr, size_t size)
 		asm volatile ("tlbi vae1is, %0"
 		              :: "r" (addr >> 12 | (uint64_t)mmu_regs.id() << 48));
 	return false;
-}
-
-
-void Kernel::Thread::_call_cache_coherent_region()
-{
-	addr_t       base = (addr_t) user_arg_1();
-	size_t const size = (size_t) user_arg_2();
-
-	/**
-	 * sanity check that only one small page is affected,
-	 * because we only want to lookup one page in the page tables
-	 * to limit execution time within the kernel
-	 */
-	if (Hw::trunc_page(base) != Hw::trunc_page(base+size-1)) {
-		Genode::raw(*this, " tried to make cross-page region cache coherent ",
-		            (void*)base, " ", size);
-		return;
-	}
-
-	/**
-	 * Lookup whether the page is backed, and if so make the memory coherent
-	 * in between I-, and D-cache
-	 */
-	addr_t phys = 0;
-	if (pd().platform_pd().lookup_translation(base, phys)) {
-		Cpu::cache_coherent_region(base, size);
-	} else {
-		Genode::raw(*this, " tried to make invalid address ",
-		            base, " cache coherent");
-	}
 }
 
 

@@ -17,6 +17,7 @@
 
 using namespace Genode;
 
+
 bool Board::Pic::Usb_dwc_otg::_need_trigger_sof(uint32_t host_frame,
                                                 uint32_t scheduled_frame)
 {
@@ -36,8 +37,11 @@ bool Board::Pic::Usb_dwc_otg::_need_trigger_sof(uint32_t host_frame,
 }
 
 
-Board::Pic::Usb_dwc_otg::Usb_dwc_otg()
-: Mmio(Platform::mmio_to_virt(Board::USB_DWC_OTG_BASE))
+Board::Pic::
+Usb_dwc_otg::Usb_dwc_otg(Global_interrupt_controller &global_irq_ctrl)
+:
+	Mmio             { Platform::mmio_to_virt(Board::USB_DWC_OTG_BASE) },
+	_global_irq_ctrl { global_irq_ctrl }
 {
 	write<Guid::Num>(0);
 	write<Guid::Num_valid>(false);
@@ -50,10 +54,8 @@ bool Board::Pic::Usb_dwc_otg::handle_sof()
 	if (!_is_sof())
 		return false;
 
-	static int cnt = 0;
-
-	if (++cnt == 8*20) {
-		cnt = 0;
+	if (_global_irq_ctrl.increment_and_return_sof_cnt() == 8*20) {
+		_global_irq_ctrl.reset_sof_cnt();
 		return false;
 	}
 
@@ -70,8 +72,13 @@ bool Board::Pic::Usb_dwc_otg::handle_sof()
 }
 
 
-Board::Pic::Pic()
-: Mmio(Platform::mmio_to_virt(Board::IRQ_CONTROLLER_BASE)) { mask(); }
+Board::Pic::Pic(Global_interrupt_controller &global_irq_ctrl)
+:
+	Mmio { Platform::mmio_to_virt(Board::IRQ_CONTROLLER_BASE) },
+	_usb { global_irq_ctrl }
+{
+	mask();
+}
 
 
 bool Board::Pic::take_request(unsigned &irq)

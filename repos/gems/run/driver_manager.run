@@ -144,8 +144,8 @@ close $fd
 # with the (possibly modified) version found in the source tree. This avoids
 # the need to re-create the pkg while testing modifications of this file.
 #
-file copy -force [genode_dir]/repos/gems/recipes/raw/drivers_managed-pc/drivers.config \
-                 [run_dir]/genode/drivers.config
+copy_file [genode_dir]/repos/gems/recipes/raw/drivers_managed-pc/drivers.config \
+          [run_dir]/genode/drivers.config
 
 build_boot_image { driver_manager test-driver_manager ld.lib.so }
 
@@ -164,7 +164,6 @@ if {[have_include "power_on/qemu"]} {
 #
 # Qemu opts for supplying hdd_disk.raw as AHCI disk
 #
-append qemu_args " -m 128 "
 append qemu_args " -nographic "
 append qemu_args " -device ahci,id=ahci "
 append qemu_args " -drive id=hdd,file=bin/hdd_disk.raw,format=raw,if=none -device ide-hd,drive=hdd,bus=ahci.1 "

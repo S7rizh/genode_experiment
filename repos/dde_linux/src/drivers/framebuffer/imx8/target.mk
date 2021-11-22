@@ -7,6 +7,7 @@ SRC_C    = dummies.c lx_emul_c.c
 
 # lx_kit
 SRC_CC  += printf.cc \
+           bug.cc \
            env.cc \
            irq.cc \
            malloc.cc \
@@ -17,7 +18,7 @@ SRC_CC  += printf.cc \
 INC_DIR += $(REP_DIR)/src/include
 
 vpath %.cc $(PRG_DIR)
-vpath %.cc $(REP_DIR)/src/lx_kit
+vpath %.cc $(REP_DIR)/src/lib/legacy/lx_kit
 
 CC_CXX_WARN_STRICT =
 CC_OPT += -Wno-narrowing

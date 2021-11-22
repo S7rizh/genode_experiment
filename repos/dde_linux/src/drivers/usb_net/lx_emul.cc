@@ -7,27 +7,27 @@
 #include <driver.h>
 #include <lx_emul.h>
 
-#include <lx_emul/extern_c_begin.h>
+#include <legacy/lx_emul/extern_c_begin.h>
 #include <linux/usb.h>
-#include <lx_emul/extern_c_end.h>
+#include <legacy/lx_emul/extern_c_end.h>
 
 #define TRACE do { ; } while (0)
 
-#include <lx_emul/impl/kernel.h>
-#include <lx_emul/impl/delay.h>
-#include <lx_emul/impl/slab.h>
-#include <lx_emul/impl/work.h>
-#include <lx_emul/impl/spinlock.h>
-#include <lx_emul/impl/mutex.h>
-#include <lx_emul/impl/sched.h>
-#include <lx_emul/impl/timer.h>
-#include <lx_emul/impl/completion.h>
-#include <lx_emul/impl/wait.h>
-#include <lx_emul/impl/usb.h>
+#include <legacy/lx_emul/impl/kernel.h>
+#include <legacy/lx_emul/impl/delay.h>
+#include <legacy/lx_emul/impl/slab.h>
+#include <legacy/lx_emul/impl/work.h>
+#include <legacy/lx_emul/impl/spinlock.h>
+#include <legacy/lx_emul/impl/mutex.h>
+#include <legacy/lx_emul/impl/sched.h>
+#include <legacy/lx_emul/impl/timer.h>
+#include <legacy/lx_emul/impl/completion.h>
+#include <legacy/lx_emul/impl/wait.h>
+#include <legacy/lx_emul/impl/usb.h>
 
-#include <lx_kit/backend_alloc.h>
+#include <legacy/lx_kit/backend_alloc.h>
 
-#include <lx_emul/extern_c_begin.h>
+#include <legacy/lx_emul/extern_c_begin.h>
 
 #include <linux/mii.h>
 
@@ -116,7 +116,7 @@ int usb_match_one_id(struct usb_interface *interface,
 	return usb_match_one_id_intf(dev, intf, id);
 }
 
-#include <lx_emul/extern_c_end.h>
+#include <legacy/lx_emul/extern_c_end.h>
 
 
 class Addr_to_page_mapping : public Genode::List<Addr_to_page_mapping>::Element
@@ -195,9 +195,12 @@ struct task_struct *current;
 struct workqueue_struct *system_wq;
 unsigned long jiffies;
 
-Genode::Ram_dataspace_capability Lx::backend_alloc(Genode::addr_t size, Genode::Cache_attribute cached) {
-	return Lx_kit::env().env().ram().alloc(size, cached); }
 
+Genode::Ram_dataspace_capability Lx::backend_alloc(Genode::addr_t size,
+                                                   Genode::Cache cache)
+{
+	return Lx_kit::env().env().ram().alloc(size, cache);
+}
 
 
 int usb_register_driver(struct usb_driver * driver, struct module *, const char *)
@@ -380,10 +383,12 @@ int register_netdev(struct net_device *dev)
 };
 
 
-net_device * Session_component::_register_session_component(Session_component & s,
-                                                            Genode::Session_label policy)
+net_device *
+Linux_network_session_base::
+_register_session(Linux_network_session_base &session,
+                  Genode::Session_label       policy)
 {
-	if (single_net_device) single_net_device->session_component = (void*) &s;
+	if (single_net_device) single_net_device->session_component = &session;
 	return single_net_device;
 }
 
@@ -430,7 +435,8 @@ void netif_carrier_off(struct net_device *dev)
 {
 	dev->state |= 1 << __LINK_STATE_NOCARRIER;
 	if (dev->session_component)
-		reinterpret_cast<Session_component*>(dev->session_component)->link_state(false);
+		reinterpret_cast<Linux_network_session_base*>(dev->session_component)->
+			link_state(false);
 }
 
 
@@ -457,14 +463,16 @@ void netif_carrier_on(struct net_device *dev)
 {
 	dev->state &= ~(1 << __LINK_STATE_NOCARRIER);
 	if (dev->session_component)
-		reinterpret_cast<Session_component*>(dev->session_component)->link_state(true);
+		reinterpret_cast<Linux_network_session_base*>(dev->session_component)->
+			link_state(true);
 }
 
 
 int netif_rx(struct sk_buff * skb)
 {
 	if (skb->dev->session_component)
-		reinterpret_cast<Session_component*>(skb->dev->session_component)->receive(skb);
+		reinterpret_cast<Linux_network_session_base*>(skb->dev->session_component)->
+			receive(skb);
 
 	dev_kfree_skb(skb);
 	return NET_RX_SUCCESS;

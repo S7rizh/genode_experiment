@@ -9,6 +9,7 @@ import_from_depot [depot_user]/src/[base_src] \
                   [depot_user]/src/init \
                   [depot_user]/src/vfs_ttf \
                   [depot_user]/src/libc \
+                  [depot_user]/src/shim \
                   [depot_user]/raw/ttf-bitstream-vera-minimal
 
 create_tar_from_depot_binaries [run_dir]/genode/depot.tar \
@@ -251,6 +252,7 @@ install_config {
 		<route>
 			<service name="ROM" label_last="ld.lib.so"> <parent/> </service>
 			<service name="ROM" label_last="init">      <parent/> </service>
+			<service name="ROM" label_last="shim">      <parent/> </service>
 			<service name="ROM" label="config"> <child name="report_rom"/> </service>
 			<service name="ROM" label_last="fonts.config"> <parent/> </service>
 			<service name="ROM" label_last="vimrc">        <parent/> </service>
@@ -268,8 +270,8 @@ install_config {
 
 build { app/depot_query app/depot_deploy }
 
-file copy -force [genode_dir]/repos/gems/run/sculpt/fonts.config [run_dir]/genode/
-file copy -force [genode_dir]/repos/ports/recipes/raw/system_shell/system_shell.config [run_dir]/genode/
+copy_file [genode_dir]/repos/gems/run/sculpt/fonts.config [run_dir]/genode/
+copy_file [genode_dir]/repos/ports/recipes/raw/system_shell/system_shell.config [run_dir]/genode/
 
 #
 # Pin the nitpicker focus to the window manager by providing a static focus ROM

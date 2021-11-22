@@ -21,10 +21,11 @@
 
 namespace Qemu {
 
-	typedef Genode::size_t  size_t;
-	typedef Genode::off_t   off_t;
-	typedef Genode::int64_t int64_t;
-	typedef Genode::addr_t  addr_t;
+	typedef Genode::size_t   size_t;
+	typedef Genode::off_t    off_t;
+	typedef Genode::int64_t  int64_t;
+	typedef Genode::addr_t   addr_t;
+	typedef Genode::uint16_t uint16_t;
 
 
 	/************************************
@@ -57,6 +58,8 @@ namespace Qemu {
 	 */
 	struct Pci_device
 	{
+		enum class Dma_direction { IN = 0, OUT = 1, };
+
 		/**
 		 * Raise interrupt
 		 *
@@ -65,8 +68,8 @@ namespace Qemu {
 		virtual void  raise_interrupt(int assert) = 0;
 		virtual int   read_dma(addr_t addr, void *buf, size_t size) = 0;
 		virtual int   write_dma(addr_t addr, void const *buf, size_t size) = 0;
-		virtual void *map_dma(addr_t base, size_t size) = 0;
-		virtual void  unmap_dma(void *addr, size_t size) = 0;
+		virtual void *map_dma(addr_t base, size_t size, Dma_direction dir) = 0;
+		virtual void  unmap_dma(void *addr, size_t size, Dma_direction dir) = 0;
 	};
 
 
@@ -81,6 +84,20 @@ namespace Qemu {
 	 */
 	struct Controller
 	{
+		/*
+		 * Controller information
+		 */
+		struct Info
+		{
+			uint16_t vendor_id;
+			uint16_t product_id;
+		};
+
+		/**
+		 * Get information of the controller
+		 */
+		virtual Info info() const = 0;
+
 		/**
 		 * Size of the MMIO region of the controller
 		 */
@@ -104,7 +121,8 @@ namespace Qemu {
 	 */
 	Controller *usb_init(Timer_queue &tq, Pci_device &pd,
 	                     Genode::Entrypoint &ep,
-	                     Genode::Allocator &, Genode::Env &);
+	                     Genode::Allocator &, Genode::Env &,
+	                     Genode::Xml_node const &);
 
 	/**
 	 * Reset USB libray

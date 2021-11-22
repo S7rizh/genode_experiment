@@ -165,6 +165,11 @@ all: $(LIB_TAG)
 #
 $(LIB_TAG) $(OBJECTS): $(HOST_TOOLS)
 
+#
+# Trigger build of additional library specific targets
+#
+$(LIB_TAG): $(CUSTOM_TARGET_DEPS)
+
 $(LIB_TAG): $(LIB_A) $(LIB_SO) $(LIB_CHECKED) $(ABI_SO) $(INSTALL_SO) $(DEBUG_SO)
 	@touch $@
 
@@ -235,8 +240,8 @@ $(ABI_SO): $(LIB).symbols.o
 	                $(LIB_SO_DEPS) $< \
 	                --end-group --no-whole-archive
 
-$(LIB_CHECKED): $(LIB_SO)
-	$(VERBOSE)$(BASE_DIR)/../../tool/check_abi $(LIB_SO) $(SYMBOLS)
+$(LIB_CHECKED): $(LIB_SO) $(SYMBOLS)
+	$(VERBOSE)$(BASE_DIR)/../../tool/check_abi $(LIB_SO) $(SYMBOLS) && touch $@
 
 $(LIB_SO).stripped: $(LIB_SO)
 	$(VERBOSE)$(STRIP) -o $@ $<

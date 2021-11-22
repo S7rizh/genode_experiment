@@ -29,7 +29,10 @@ namespace Igd {
 
 	struct Common_context_regs;
 
+	struct Generation;
+
 	struct Hardware_status_page;
+	class  Pphardware_status_page;
 	template <addr_t RING_BASE> class Execlist_context;
 	template <addr_t RING_BASE> class Ppgtt_context;
 	class Engine_context;
@@ -39,6 +42,7 @@ namespace Igd {
 	class Rcs_context;
 }
 
+struct Igd::Generation { unsigned value; };
 
 /*
  * IHD-OS-BDW-Vol 6-11.15 p. 8
@@ -88,6 +92,9 @@ struct Igd::Common_context_regs : public Genode::Mmio
 	template <long int OFFSET, size_t NUM>
 	struct Common_register_array : Register_array<OFFSET * sizeof(uint32_t), 32, NUM, 32> { };
 
+	template <long int OFFSET, size_t NUM>
+	struct Common_register_array_64 : Register_array<OFFSET * sizeof(uint32_t), 64, NUM, 64> { };
+
 	addr_t _base;
 
 	Common_context_regs(addr_t base) : Genode::Mmio(base), _base(base) { }
@@ -136,8 +143,11 @@ class Igd::Execlist_context : public Igd::Common_context_regs
 
 			struct Mask_bits : R::template Bitfield<16, 16> { };
 
-			struct Inhibit_syn_context_switch_mask : R::template Bitfield<18, 1> { };
+			struct Inhibit_syn_context_switch_mask : R::template Bitfield<19, 1> { };
 			struct Inhibit_syn_context_switch      : R::template Bitfield< 3, 1> { };
+
+			struct Engine_context_save_inhibit_mask : R::template Bitfield< 18, 1> { };
+			struct Engine_context_save_inhibit : R::template Bitfield< 2, 1> { };
 
 			struct Rs_context_enable_mask : R::template Bitfield<17, 1> { };
 			struct Rs_context_enable      : R::template Bitfield< 1, 1> { };
@@ -350,10 +360,11 @@ class Igd::Execlist_context : public Igd::Common_context_regs
 
 	public:
 
-		Execlist_context(addr_t base,
-		                 addr_t ring_buffer_start,
-		                 size_t ring_buffer_length,
-		                 uint32_t immediate_header)
+		Execlist_context(addr_t     const base,
+		                 addr_t     const ring_buffer_start,
+		                 size_t     const ring_buffer_length,
+		                 uint32_t   const immediate_header,
+		                 Generation const gen)
 		:
 			Common_context_regs(base)
 		{
@@ -365,6 +376,12 @@ class Igd::Execlist_context : public Igd::Common_context_regs
 				Context_control_value::Engine_context_restore_inhibit::set(v, 1);
 				Context_control_value::Inhibit_syn_context_switch_mask::set(v, 1);
 				Context_control_value::Inhibit_syn_context_switch::set(v, 1);
+				if (gen.value < 11) {
+					Context_control_value::Engine_context_save_inhibit_mask::set(v, 1);
+					Context_control_value::Engine_context_save_inhibit::set(v, 0);
+					Context_control_value::Rs_context_enable_mask::set(v, 1);
+					Context_control_value::Rs_context_enable::set(v, 0);
+				}
 				write<Context_control_value>(v);
 			}
 			write_offset<Ring_buffer_head_mmio>(RING_BASE);
@@ -381,7 +398,7 @@ class Igd::Execlist_context : public Igd::Common_context_regs
 			{
 				typename Ring_buffer_control_value::access_t v = read<Ring_buffer_control_value>();
 				/* length is given in number of pages */
-				Ring_buffer_control_value::Buffer_length::set(v, ring_buffer_length / PAGE_SIZE);
+				Ring_buffer_control_value::Buffer_length::set(v, (ring_buffer_length / PAGE_SIZE) - 1);
 				/* according to the PRM it should be disable b/c of the amount of reports generated */
 				Ring_buffer_control_value::Arhp::set(v, Ring_buffer_control_value::Arhp::MI_AUTOREPORT_OFF);
 				Ring_buffer_control_value::Ring_buffer_enable::set(v, 1);
@@ -677,11 +694,80 @@ class Igd::Hardware_status_page : public Igd::Common_context_regs
 		/*
 		 * See CTXT_ST_BUF
 		 */
-		enum { CONTEXT_STATUS_DWORDS_NUM = 12, };
-		struct Context_status_dwords : Common_register_array<16, CONTEXT_STATUS_DWORDS_NUM> { };
+		enum {
+			CONTEXT_STATUS_DWORDS_NUM = 12,
+			CONTEXT_STATUS_REGISTERS  = CONTEXT_STATUS_DWORDS_NUM / 2,
+		};
+		struct Context_status_dwords : Common_register_array_64<16, CONTEXT_STATUS_REGISTERS> { };
 		struct Last_written_status_offset : Common_register<31> { };
 
 		Hardware_status_page(addr_t base)
+		: Common_context_regs(base) { }
+
+		void dump(bool raw = false)
+		{
+			using namespace Genode;
+
+			if (raw) {
+				uint32_t const *p = (uint32_t const *)base();
+				for (uint32_t i = 0; i < PAGE_SIZE / sizeof(uint32_t); i += 8) {
+					log(Hex(i, Hex::PREFIX, Hex::PAD), "  ",
+					    Hex(p[i  ], Hex::PREFIX, Hex::PAD), " ",
+					    Hex(p[i+1], Hex::PREFIX, Hex::PAD), " ",
+					    Hex(p[i+2], Hex::PREFIX, Hex::PAD), " ",
+					    Hex(p[i+3], Hex::PREFIX, Hex::PAD), " ",
+					    Hex(p[i+4], Hex::PREFIX, Hex::PAD), " ",
+					    Hex(p[i+5], Hex::PREFIX, Hex::PAD), " ",
+					    Hex(p[i+6], Hex::PREFIX, Hex::PAD), " ",
+					    Hex(p[i+7], Hex::PREFIX, Hex::PAD));
+				}
+			} else {
+				log("Hardware_status_page");
+				log("   Interrupt_status_register_storage: ",
+				    Hex(read<Interrupt_status_register_storage>(),
+				        Hex::PREFIX, Hex::PAD));
+				log("   Ring_head_ptr_storage: ",
+				    Hex(read<Ring_head_ptr_storage>(),
+				        Hex::PREFIX, Hex::PAD));
+
+				auto const cs_last = read<Last_written_status_offset>();
+
+				log("   Last_written_status_offset: ",
+				    Hex(cs_last, Hex::PREFIX, Hex::PAD));
+
+				for (unsigned i = 0; i < CONTEXT_STATUS_REGISTERS; i++) {
+					using C = Igd::Context_status_qword;
+					C::access_t v = read<Context_status_dwords>(i);
+					log("   Context_status ", i);
+					log("    Context_id:          ", C::Context_id::get(v));
+					log("    Lite_restore:        ", C::Lite_restore::get(v));
+					log("    Display_plane:       ", C::Display_plane::get(v));
+					log("    Semaphore_wait_mode: ", C::Semaphore_wait_mode::get(v));
+					log("    Wait_on_scanline:    ", C::Wait_on_scanline::get(v));
+					log("    Wait_on_semaphore:   ", C::Wait_on_semaphore::get(v));
+					log("    Wait_on_v_blank:     ", C::Wait_on_v_blank::get(v));
+					log("    Wait_on_sync_flip:   ", C::Wait_on_sync_flip::get(v));
+					log("    Context_complete:    ", C::Context_complete::get(v));
+					log("    Active_to_idle:      ", C::Active_to_idle::get(v));
+					log("    Element_switch:      ", C::Element_switch::get(v));
+					log("    Preempted:           ", C::Preempted::get(v));
+					log("    Idle_to_active:      ", C::Idle_to_active::get(v));
+				}
+			}
+		}
+};
+
+
+/*
+ * IHD-OS-BDW-Vol 2d-11.15 p. 303
+ */
+class Igd::Pphardware_status_page : public Igd::Common_context_regs
+{
+	public:
+
+		struct Ring_head_ptr_storage : Common_register<4> { };
+
+		Pphardware_status_page(addr_t base)
 		: Common_context_regs(base) { }
 };
 
@@ -694,7 +780,7 @@ class Igd::Rcs_context
 
 		enum {
 			HW_ID         = 0,
-			CONTEXT_PAGES = 20 /* ctx */ + 1 /* GuC */,
+			CONTEXT_PAGES = 22 /* ctx */ + 1 /* GuC */,
 			RING_PAGES    = 4,
 
 			RCS_RING_BASE = 0x2000,
@@ -712,7 +798,8 @@ class Igd::Rcs_context
 			PPGTT_CTX_START = EXECLIST_CTX_END,
 			PPGTT_CTX_END   = 0x0050,
 			PPGTT_CTX_SIZE  = (PPGTT_CTX_END - PPGTT_CTX_START) * sizeof(uint32_t),
-			PPGTT_CTX_IH    = 0x11000001,
+			PPGTT_CTX_IH    = 0x11001011,
+			PPGTT_CTX_IH_2  = 0x11000001,
 
 			ENGINE_CTX_START = PPGTT_CTX_END,
 			ENGINE_CTX_END   = 0x0EC0,
@@ -729,7 +816,7 @@ class Igd::Rcs_context
 
 	private:
 
-		Hardware_status_page            _hw_status_page;
+		Pphardware_status_page          _hw_status_page;
 		Execlist_context<RCS_RING_BASE> _execlist_context;
 		Ppgtt_context<RCS_RING_BASE>    _ppgtt_context;
 		Engine_context                  _engine_context;
@@ -738,15 +825,16 @@ class Igd::Rcs_context
 
 	public:
 
-		Rcs_context(addr_t   map_base,
-		            addr_t   ring_buffer_start,
-		            size_t   ring_buffer_length,
-		            uint64_t plm4_addr)
+		Rcs_context(addr_t     const map_base,
+		            addr_t     const ring_buffer_start,
+		            size_t     const ring_buffer_length,
+		            uint64_t   const plm4_addr,
+		            Generation const gen)
 		:
 			_hw_status_page(map_base),
 			_execlist_context((addr_t)(map_base + HW_STATUS_PAGE_SIZE),
 			                  ring_buffer_start, ring_buffer_length,
-			                  EXECLIST_CTX_IH),
+			                  EXECLIST_CTX_IH, gen),
 			_ppgtt_context((addr_t)(map_base + HW_STATUS_PAGE_SIZE), plm4_addr),
 			_engine_context(),
 			_ext_engine_context(),
@@ -788,7 +876,8 @@ class Igd::Rcs_context
 
 			using P = Ppgtt_context<RCS_RING_BASE>;
 
-			_ppgtt_context.write<P::Load_immediate_header_2>(PPGTT_CTX_IH);
+			_ppgtt_context.write<P::Load_immediate_header>(PPGTT_CTX_IH);
+			_ppgtt_context.write<P::Load_immediate_header_2>(PPGTT_CTX_IH_2);
 		}
 
 		size_t head_offset()
@@ -799,6 +888,11 @@ class Igd::Rcs_context
 		void tail_offset(addr_t offset)
 		{
 			_execlist_context.tail_offset(offset);
+		}
+
+		addr_t tail_offset()
+		{
+			return _execlist_context.tail_offset();
 		}
 
 		/*********************
@@ -823,43 +917,6 @@ class Igd::Rcs_context
 			log("  Rcs_indirect_ctx_offset: ", Hex(_execlist_context.read<C::Rcs_indirect_ctx_offset_value>(), Hex::PREFIX, Hex::PAD));
 
 			_ppgtt_context.dump();
-		}
-
-		void dump_hw_status_page(bool raw = false)
-		{
-			using namespace Genode;
-
-			if (raw) {
-				uint32_t const *p = (uint32_t const *)_hw_status_page.base();
-				for (uint32_t i = 0; i < HW_STATUS_PAGE_SIZE / sizeof(uint32_t); i += 8) {
-					log(Hex(i, Hex::PREFIX, Hex::PAD), "  ",
-					    Hex(p[i  ], Hex::PREFIX, Hex::PAD), " ",
-					    Hex(p[i+1], Hex::PREFIX, Hex::PAD), " ",
-					    Hex(p[i+2], Hex::PREFIX, Hex::PAD), " ",
-					    Hex(p[i+3], Hex::PREFIX, Hex::PAD), " ",
-					    Hex(p[i+4], Hex::PREFIX, Hex::PAD), " ",
-					    Hex(p[i+5], Hex::PREFIX, Hex::PAD), " ",
-					    Hex(p[i+6], Hex::PREFIX, Hex::PAD), " ",
-					    Hex(p[i+7], Hex::PREFIX, Hex::PAD));
-				}
-			} else {
-				using H = Hardware_status_page;
-				log("Hardware_status_page");
-				log("   Interrupt_status_register_storage: ",
-				    Hex(_hw_status_page.read<H::Interrupt_status_register_storage>(),
-				        Hex::PREFIX, Hex::PAD));
-				log("   Ring_head_ptr_storage: ",
-				    Hex(_hw_status_page.read<H::Ring_head_ptr_storage>(),
-				        Hex::PREFIX, Hex::PAD));
-				for (int i = 0; i < H::CONTEXT_STATUS_DWORDS_NUM; i++) {
-					log("   Context_status_dwords: ",
-				        Hex(_hw_status_page.read<H::Context_status_dwords>(i),
-				            Hex::PREFIX, Hex::PAD));
-				}
-				log("   Last_written_status_offset: ",
-				    Hex(_hw_status_page.read<H::Last_written_status_offset>(),
-				        Hex::PREFIX, Hex::PAD));
-			}
 		}
 
 		void dump_execlist_context()

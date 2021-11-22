@@ -20,6 +20,9 @@
 #include <depot/archive.h>
 #include <gems/lru_cache.h>
 
+/* fs_query includes */
+#include <for_each_subdir_name.h>
+
 namespace Depot_query {
 
 	using namespace Depot;
@@ -362,6 +365,18 @@ struct Depot_query::Main : private Rom_query
 
 	Architecture _architecture  { };
 
+	template <typename FN>
+	void _with_file_content(Directory::Path const &path, char const *name, FN const &fn)
+	{
+		try {
+			File_content const content(_heap, Directory(_depot_dir, path),
+			                           name, File_content::Limit{16*1024});
+			fn(content);
+		}
+		catch (File_content::Nonexistent_file)   { }
+		catch (Directory::Nonexistent_directory) { }
+	}
+
 	/**
 	 * Produce report that reflects the query version
 	 *
@@ -392,10 +407,16 @@ struct Depot_query::Main : private Rom_query
 	Archive::Path find_rom_in_pkg(Directory::Path const &, Rom_label const &,
 	                              Recursion_limit) override;
 
+	void _gen_rom_path_nodes(Xml_generator &, Xml_node const &,
+	                         Archive::Path const &, Xml_node const &);
+	void _gen_inherited_rom_path_nodes(Xml_generator &, Xml_node const &,
+	                                   Archive::Path const &, Recursion_limit);
 	void _query_blueprint(Directory::Path const &, Xml_generator &);
 	void _collect_source_dependencies(Archive::Path const &, Dependencies &, Recursion_limit);
 	void _collect_binary_dependencies(Archive::Path const &, Dependencies &, Recursion_limit);
 	void _query_user(Archive::User const &, Xml_generator &);
+	void _gen_index_node_rec(Xml_generator &, Xml_node const &, unsigned) const;
+	void _gen_index_for_arch(Xml_generator &, Xml_node const &) const;
 	void _query_index(Archive::User const &, Archive::Version const &, bool, Xml_generator &);
 
 	void _handle_config()
@@ -456,9 +477,9 @@ struct Depot_query::Main : private Rom_query
 		_gen_versioned_report(_scan_reporter, version, [&] (Xml_generator &xml) {
 			query.for_each_sub_node("scan", [&] (Xml_node node) {
 				if (node.attribute_value("users", false)) {
-					_depot_dir.for_each_entry([&] (Directory::Entry const &entry) {
+					for_each_subdir_name(_heap, _depot_dir, [&] (auto name) {
 						xml.node("user", [&] () {
-							xml.attribute("name", entry.name()); }); }); } }); });
+							xml.attribute("name", name); }); }); } }); });
 
 		_gen_versioned_report(_blueprint_reporter, version, [&] (Xml_generator &xml) {
 			query.for_each_sub_node("blueprint", [&] (Xml_node node) {
@@ -577,6 +598,78 @@ Depot_query::Main::find_rom_in_pkg(Directory::Path const &pkg_path,
 }
 
 
+void Depot_query::Main::_gen_rom_path_nodes(Xml_generator       &xml,
+                                            Xml_node      const &env_xml,
+                                            Archive::Path const &pkg_path,
+                                            Xml_node      const &runtime)
+{
+	runtime.for_each_sub_node("content", [&] (Xml_node content) {
+		content.for_each_sub_node([&] (Xml_node node) {
+
+			/* skip non-rom nodes */
+			if (!node.has_type("rom"))
+				return;
+
+			Rom_label const label = node.attribute_value("label", Rom_label());
+
+			/* skip ROM that is provided by the environment */
+			bool provided_by_env = false;
+			env_xml.for_each_sub_node("rom", [&] (Xml_node node) {
+				if (node.attribute_value("label", Rom_label()) == label)
+					provided_by_env = true; });
+
+			if (provided_by_env) {
+				xml.node("rom", [&] () {
+					xml.attribute("label", label);
+					xml.attribute("env", "yes");
+				});
+				return;
+			}
+
+			Archive::Path const rom_path =
+				_cached_rom_query.find_rom_in_pkg(pkg_path, label, Recursion_limit{8});
+
+			if (rom_path.valid()) {
+				xml.node("rom", [&] () {
+					xml.attribute("label", label);
+					xml.attribute("path", rom_path);
+				});
+
+			} else {
+
+				xml.node("missing_rom", [&] () {
+					xml.attribute("label", label); });
+			}
+		});
+	});
+}
+
+
+void Depot_query::Main::_gen_inherited_rom_path_nodes(Xml_generator       &xml,
+                                                      Xml_node      const &env_xml,
+                                                      Archive::Path const &pkg_path,
+                                                      Recursion_limit      recursion_limit)
+{
+	_with_file_content(pkg_path, "archives", [&] (File_content const &archives) {
+		archives.for_each_line<Archive::Path>([&] (Archive::Path const &archive_path) {
+
+			/* early return if archive path is not a valid pkg path */
+			try {
+				if (Archive::type(archive_path) != Archive::PKG)
+					return;
+			}
+			catch (Archive::Unknown_archive_type) { return; }
+
+			_with_file_content(archive_path, "runtime" , [&] (File_content const &runtime) {
+				runtime.xml([&] (Xml_node node) {
+					_gen_rom_path_nodes(xml, env_xml, pkg_path, node); }); });
+
+			_gen_inherited_rom_path_nodes(xml, env_xml, archive_path, recursion_limit);
+		});
+	});
+}
+
+
 void Depot_query::Main::_query_blueprint(Directory::Path const &pkg_path, Xml_generator &xml)
 {
 	Directory pkg_dir(_root, Directory::Path("depot/", pkg_path));
@@ -594,48 +687,12 @@ void Depot_query::Main::_query_blueprint(Directory::Path const &pkg_path, Xml_ge
 			if (config.valid())
 				xml.attribute("config", config);
 
-			Xml_node env_xml = _config.xml().has_sub_node("env")
-			                 ? _config.xml().sub_node("env") : "<env/>";
+			Xml_node const env_xml = _config.xml().has_sub_node("env")
+			                       ? _config.xml().sub_node("env") : "<env/>";
 
-			node.for_each_sub_node("content", [&] (Xml_node content) {
-				content.for_each_sub_node([&] (Xml_node node) {
+			_gen_rom_path_nodes(xml, env_xml, pkg_path, node);
 
-					/* skip non-rom nodes */
-					if (!node.has_type("rom"))
-						return;
-
-					Rom_label const label = node.attribute_value("label", Rom_label());
-
-					/* skip ROM that is provided by the environment */
-					bool provided_by_env = false;
-					env_xml.for_each_sub_node("rom", [&] (Xml_node node) {
-						if (node.attribute_value("label", Rom_label()) == label)
-							provided_by_env = true; });
-
-					if (provided_by_env) {
-						xml.node("rom", [&] () {
-							xml.attribute("label", label);
-							xml.attribute("env", "yes");
-						});
-						return;
-					}
-
-					Archive::Path const rom_path =
-						_cached_rom_query.find_rom_in_pkg(pkg_path, label, Recursion_limit{8});
-
-					if (rom_path.valid()) {
-						xml.node("rom", [&] () {
-							xml.attribute("label", label);
-							xml.attribute("path", rom_path);
-						});
-
-					} else {
-
-						xml.node("missing_rom", [&] () {
-							xml.attribute("label", label); });
-					}
-				});
-			});
+			_gen_inherited_rom_path_nodes(xml, env_xml, pkg_path, Recursion_limit{8});
 
 			String<160> comment("\n\n<!-- content of '", pkg_path, "/runtime' -->\n");
 			xml.append(comment.string());
@@ -659,33 +716,26 @@ void Depot_query::Main::_collect_source_dependencies(Archive::Path const &path,
 
 	dependencies.record(path);
 
-	try { switch (Archive::type(path)) {
+	switch (Archive::type(path)) {
 
 	case Archive::PKG: {
-		File_content archives(_heap, Directory(_depot_dir, path),
-		                      "archives", File_content::Limit{16*1024});
-
-		archives.for_each_line<Archive::Path>([&] (Archive::Path const &path) {
-			_collect_source_dependencies(path, dependencies, recursion_limit); });
+		_with_file_content(path, "archives", [&] (File_content const &archives) {
+			archives.for_each_line<Archive::Path>([&] (Archive::Path const &path) {
+				_collect_source_dependencies(path, dependencies, recursion_limit); }); });
 		break;
 	}
 
 	case Archive::SRC: {
-		File_content used_apis(_heap, Directory(_depot_dir, path),
-		                       "used_apis", File_content::Limit{16*1024});
-
 		typedef String<160> Api;
-		used_apis.for_each_line<Archive::Path>([&] (Api const &api) {
-			dependencies.record(Archive::Path(Archive::user(path), "/api/", api));
-		});
+		_with_file_content(path, "used_apis", [&] (File_content const &used_apis) {
+			used_apis.for_each_line<Archive::Path>([&] (Api const &api) {
+				dependencies.record(Archive::Path(Archive::user(path), "/api/", api)); }); });
 		break;
 	}
 
 	case Archive::RAW:
 		break;
-	}; }
-	catch (File_content::Nonexistent_file) { }
-	catch (Directory::Nonexistent_directory) { }
+	};
 }
 
 
@@ -702,18 +752,11 @@ void Depot_query::Main::_collect_binary_dependencies(Archive::Path const &path,
 	switch (Archive::type(path)) {
 
 	case Archive::PKG:
-		try {
-			dependencies.record(path);
+		dependencies.record(path);
 
-			File_content archives(_heap, Directory(_depot_dir, path),
-			                      "archives", File_content::Limit{16*1024});
-
+		_with_file_content(path, "archives", [&] (File_content const &archives) {
 			archives.for_each_line<Archive::Path>([&] (Archive::Path const &archive_path) {
-				_collect_binary_dependencies(archive_path, dependencies, recursion_limit); });
-
-		}
-		catch (File_content::Nonexistent_file) { }
-		catch (Directory::Nonexistent_directory) { }
+				_collect_binary_dependencies(archive_path, dependencies, recursion_limit); }); });
 		break;
 
 	case Archive::SRC:
@@ -759,6 +802,58 @@ void Depot_query::Main::_query_user(Archive::User const &user, Xml_generator &xm
 }
 
 
+void Depot_query::Main::_gen_index_node_rec(Xml_generator  &xml,
+                                            Xml_node const &node,
+                                            unsigned max_depth) const
+{
+	if (max_depth == 0) {
+		warning("index has too many nesting levels");
+		return;
+	}
+
+	node.for_each_sub_node([&] (Xml_node const &node) {
+
+		/* check if single index entry is compatible with architecture */
+		bool const arch_compatible =
+			!node.has_attribute("arch") ||
+			(node.attribute_value("arch", Architecture()) == _architecture);
+
+		if (!arch_compatible)
+			return;
+
+		if (node.has_type("index")) {
+			xml.node("index", [&] () {
+				xml.attribute("name", node.attribute_value("name", String<100>()));
+				_gen_index_node_rec(xml, node, max_depth - 1);
+			});
+		}
+
+		if (node.has_type("pkg")) {
+			xml.node("pkg", [&] () {
+				xml.attribute("path", node.attribute_value("path", Archive::Path()));
+				xml.attribute("info", node.attribute_value("info", String<200>()));
+			});
+		}
+	});
+};
+
+
+void Depot_query::Main::_gen_index_for_arch(Xml_generator &xml,
+                                            Xml_node const &node) const
+{
+	/* check of architecture is supported by the index */
+	bool supports_arch = false;
+	node.for_each_sub_node("supports", [&] (Xml_node const &supports) {
+		if (supports.attribute_value("arch", Architecture()) == _architecture)
+			supports_arch = true; });
+
+	if (!supports_arch)
+		return;
+
+	_gen_index_node_rec(xml, node, 10);
+}
+
+
 void Depot_query::Main::_query_index(Archive::User    const &user,
                                      Archive::Version const &version,
                                      bool const content, Xml_generator &xml)
@@ -782,8 +877,7 @@ void Depot_query::Main::_query_index(Archive::User    const &user,
 					file(_heap, _root, index_path, File_content::Limit{16*1024});
 
 				file.xml([&] (Xml_node node) {
-					node.with_raw_content([&] (char const *start, size_t lenght) {
-						xml.append(start, lenght); }); });
+					_gen_index_for_arch(xml, node); });
 
 			} catch (Directory::Nonexistent_file) { }
 		}

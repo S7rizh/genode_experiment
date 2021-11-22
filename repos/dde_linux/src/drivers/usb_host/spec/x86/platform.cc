@@ -21,14 +21,14 @@
 #include <lx_emul.h>
 #include <platform.h>
 
-#include <lx_kit/env.h>
-#include <lx_kit/irq.h>
-#include <lx_kit/pci_dev_registry.h>
-#include <lx_kit/malloc.h>
-#include <lx_kit/mapped_io_mem_range.h>
+#include <legacy/lx_kit/env.h>
+#include <legacy/lx_kit/irq.h>
+#include <legacy/lx_kit/pci_dev_registry.h>
+#include <legacy/lx_kit/malloc.h>
+#include <legacy/lx_kit/mapped_io_mem_range.h>
 
-#include <lx_emul/impl/io.h>
-#include <lx_emul/impl/pci_resource.h>
+#include <legacy/lx_emul/impl/io.h>
+#include <legacy/lx_emul/impl/pci_resource.h>
 
 
 /**
@@ -220,15 +220,23 @@ extern "C" void module_xhci_pci_init();
 
 void platform_hcd_init(Genode::Env &, Services *s)
 {
-	module_xhci_hcd_init();
-	module_xhci_pci_init();
+	if (s->xhci) {
+		module_xhci_hcd_init();
+		module_xhci_pci_init();
+	}
 
-	/* ehci_hcd should always be loaded before uhci_hcd and ohci_hcd, not after */
-	module_ehci_hcd_init();
-	module_ehci_pci_init();
+	if (s->ehci) {
+		/* ehci_hcd should always be loaded before uhci_hcd and ohci_hcd, not after */
+		module_ehci_hcd_init();
+		module_ehci_pci_init();
+	}
 
-	module_ohci_hcd_mod_init();
-	module_ohci_pci_init();
+	if (s->ohci) {
+		module_ohci_hcd_mod_init();
+		module_ohci_pci_init();
+	}
 
-	module_uhci_hcd_init();
+	if (s->uhci) {
+		module_uhci_hcd_init();
+	}
 }

@@ -23,8 +23,20 @@ set overlay_image "overlay_${flavor}.vdi"
 if {[info exists flavor_extension]} {
 	set vbox_file "vm_${flavor}${flavor_extension}.vbox"
 }
+if {![info exists use_webcam]} {
+	set use_webcam 0
+}
+if {![info exists webcam_vflip]} {
+	set webcam_vflip true
+	if {$use_webcam} {
+		if {[string match "win*" $flavor] } {
+			set webcam_vflip false
+		}
+	}
+}
 
 set build_components {
+	server/nic_router
 	server/event_filter
 	drivers/nic
 	drivers/audio
@@ -33,6 +45,7 @@ set build_components {
 }
 
 set boot_modules {
+	nic_router
 	event_filter
 	ipxe_nic_drv
 	pci_audio_drv
@@ -50,22 +63,15 @@ set config_of_app {
 		<provides>
 			<service name="Event" />
 		</provides>
-		<config>}
-append config_of_app {
+		<config>
 			<output>
-				<merge>}
-append_if [expr $use_ps2] config_of_app {
-					<input name="ps2"/>}
-append_if [expr $use_usb] config_of_app {
-					<input name="usb_hid"/>}
-append config_of_app {
+				<merge>
+					<input name="ps2"/>
+					<input name="usb_hid"/>
 				</merge>
-			</output>}
-append_if [expr $use_ps2] config_of_app {
-			<policy label="ps2" input="ps2"/> }
-append_if [expr $use_usb] config_of_app {
-			<policy label="usb_hid" input="usb_hid"/>}
-append config_of_app {
+			</output>
+			<policy label="ps2" input="ps2"/>
+			<policy label="usb_hid" input="usb_hid"/>
 		</config>
 		<route>
 			<service name="Event"> <child name="nitpicker"/> </service>
@@ -80,9 +86,43 @@ append config_of_app {
 	<start name="nic_drv" priority="-1">
 		<binary name="ipxe_nic_drv"/>
 		<resource name="RAM" quantum="8M" />
+		<route>
+			<service name="Uplink"> <child name="nic_router"/> </service>
+			<any-service> <parent/> <any-child /> </any-service>
+		</route>
+	</start>
+
+	<start name="nic_router" caps="200">
+		<resource name="RAM" quantum="10M"/>
 		<provides>
-			<service name="Nic" />
+			<service name="Nic"/>
+			<service name="Uplink"/>
 		</provides>
+		<config verbose_domain_state="yes">
+
+			<policy label_prefix="vbox"    domain="downlink"/>
+			<policy label_prefix="nic_drv" domain="uplink"/>
+
+			<domain name="uplink">
+
+				<nat domain="downlink"
+				     tcp-ports="16384"
+				     udp-ports="16384"
+				     icmp-ids="16384"/>
+
+			</domain>
+
+			<domain name="downlink" interface="10.0.3.1/24" verbose_packets="no">
+
+				<dhcp-server ip_first="10.0.3.100" ip_last="10.0.3.200" dns_config_from="uplink"/>
+
+				<tcp dst="0.0.0.0/0"><permit-any domain="uplink" /></tcp>
+				<udp dst="0.0.0.0/0"><permit-any domain="uplink" /></udp>
+				<icmp dst="0.0.0.0/0" domain="uplink"/>
+
+			</domain>
+
+		</config>
 	</start>
 
 	<!--
@@ -111,6 +151,7 @@ append config_of_app {
 			<policy label="pointer -> hover"                    report="nitpicker -> hover"/>
 			<policy label="pointer -> xray"                     report="nitpicker -> xray"/>}
 append config_of_app {
+			<policy label="usb_hid_drv -> report"               report="usb_drv -> devices"/>
 			<policy label="usb_report_filter -> devices"        report="usb_drv -> devices"/>
 			<policy label="usb_report_filter -> usb_drv_config" report="usb_drv -> config"/>
 			<policy label="vbox1 -> usb_devices"                report="usb_report_filter -> usb_devices"/>}
@@ -223,7 +264,7 @@ append config_of_app {
 
 for { set i 1} { $i <= $use_vms } { incr i} {
 	append config_of_app "
-	<start name=\"vbox${i}\" priority=\"-2\" caps=\"800\">"
+	<start name=\"vbox${i}\" priority=\"-2\" caps=\"1200\">"
 	append_if [expr $use_vbox5] config_of_app "
 		<binary name=\"$virtualbox5_binary\" />"
 
@@ -237,6 +278,10 @@ for { set i 1} { $i <= $use_vms } { incr i} {
 		<affinity xpos=\"[expr $i]\" width=\"2\" />
 		<config ld_verbose=\"yes\" vbox_file=\"${vbox_file}\" vm_name=\"${flavor}\" xhci=\"no\" capslock=\"NOROM\">"
 	}
+
+	append_if [expr $use_webcam] config_of_app {
+			<webcam vertical_flip="} $webcam_vflip {" fps="15" screen_size="false" width="640" height="480"/>}
+
 	append config_of_app {
 			<libc stdout="/dev/log" stderr="/dev/log" rtc="/dev/rtc" pipe="/pipe"/>
 			<vfs>

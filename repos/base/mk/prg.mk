@@ -180,6 +180,11 @@ LINK_ITEMS_BRIEF := $(subst $(LIB_CACHE_DIR),$$libs,$(LINK_ITEMS))
 #
 $(LINK_ITEMS) $(TARGET): $(HOST_TOOLS)
 
+#
+# Trigger build of additional program specific targets
+#
+$(TARGET): $(CUSTOM_TARGET_DEPS)
+
 LD_CMD += -Wl,--whole-archive -Wl,--start-group
 LD_CMD += $(LINK_ITEMS_BRIEF)
 LD_CMD += $(EXT_OBJECTS)
@@ -219,6 +224,10 @@ $(TARGET).stripped: $(TARGET)
 
 $(INSTALL_DIR)/$(TARGET): $(TARGET).stripped
 	$(VERBOSE)ln -sf $(CURDIR)/$< $@
+ifeq ($(COVERAGE),yes)
+	$(VERBOSE)mkdir -p $(INSTALL_DIR)/gcov_data/$(TARGET)
+	$(VERBOSE)ln -sf $(CURDIR)/*.gcno $(INSTALL_DIR)/gcov_data/$(TARGET)/
+endif
 
 ifneq ($(DEBUG_DIR),)
 $(DEBUG_DIR)/$(TARGET): $(TARGET)

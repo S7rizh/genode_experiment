@@ -34,21 +34,23 @@ class Net::Port_allocator
 {
 	public:
 
-		enum { FIRST = 49152, COUNT = 16384 };
+		enum { FIRST_PORT = 49152, NR_OF_PORTS = 16384 };
 
 	private:
 
-		Genode::Bit_allocator<COUNT> _alloc { };
+		Genode::Bit_allocator<NR_OF_PORTS> _bit_allocator    { };
+		Genode::uint16_t                   _next_port_offset { 0 };
 
 	public:
 
 		struct Allocation_conflict : Genode::Exception { };
+		struct Out_of_indices      : Genode::Exception { };
 
-		Port alloc() { return Port(_alloc.alloc() + FIRST); }
+		Port alloc();
 
 		void alloc(Port const port);
 
-		void free(Port const port) { _alloc.free(port.value - FIRST); }
+		void free(Port const port);
 };
 
 
@@ -57,8 +59,8 @@ class Net::Port_allocator_guard
 	private:
 
 		Port_allocator &_port_alloc;
-		unsigned const  _max;
-		unsigned        _used = 0;
+		unsigned const  _max_nr_of_ports;
+		unsigned        _used_nr_of_ports { 0 };
 
 	public:
 
@@ -70,9 +72,11 @@ class Net::Port_allocator_guard
 
 		void free(Port const port);
 
-		Port_allocator_guard(Port_allocator & port_alloc, unsigned const max);
+		Port_allocator_guard(Port_allocator &port_alloc,
+		                     unsigned const  max_nr_of_ports,
+		                     bool     const  verbose);
 
-		unsigned max() const { return _max; }
+		unsigned max_nr_of_ports() const { return _max_nr_of_ports; }
 };
 
 #endif /* _PORT_ALLOCATOR_H_ */

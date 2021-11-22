@@ -24,7 +24,10 @@ void Timer::Irq::occurred() { _cpu.scheduler().timeout(); }
 
 
 Timer::Irq::Irq(unsigned id, Cpu &cpu)
-: Kernel::Irq(id, cpu.irq_pool()), _cpu(cpu) {}
+:
+	Kernel::Irq { id, cpu.irq_pool(), cpu.pic() },
+	_cpu        { cpu }
+{ }
 
 
 time_t Timer::timeout_max_us() const
@@ -39,10 +42,10 @@ void Timer::set_timeout(Timeout * const timeout, time_t const duration)
 	 * Remove timeout if it is already in use. Timeouts may get overridden as
 	 * result of an update.
 	 */
-	if (timeout->_listed) {
+	if (timeout->_listed)
 		_timeout_list.remove(timeout);
-	} else {
-		timeout->_listed = true; }
+	else
+		timeout->_listed = true;
 
 	/* set timeout parameters */
 	timeout->_end = time() + duration;
@@ -84,8 +87,12 @@ void Timer::process_timeouts()
 	time_t t = time();
 	while (true) {
 		Timeout * const timeout = _timeout_list.first();
-		if (!timeout) { break; }
-		if (timeout->_end > t) { break; }
+		if (!timeout)
+			break;
+
+		if (timeout->_end > t)
+			break;
+
 		_timeout_list.remove(timeout);
 		timeout->_listed = false;
 		timeout->timeout_triggered();
@@ -94,8 +101,9 @@ void Timer::process_timeouts()
 
 
 Timer::Timer(Cpu & cpu)
-: _device(cpu.id()), _irq(interrupt_id(), cpu),
-  _last_timeout_duration(_max_value())
+:
+	_device(cpu.id()), _irq(interrupt_id(), cpu),
+	_last_timeout_duration(_max_value())
 {
 	/*
 	 * The timer frequency should allow a good accuracy on the smallest

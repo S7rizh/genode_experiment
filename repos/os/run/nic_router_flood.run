@@ -1,9 +1,15 @@
 if {![have_include power_on/qemu] ||
     [have_spec foc] ||
-    [have_spec rpi3] ||
-    [expr [have_spec imx53] && [have_spec trustzone]]} {
+    [have_board rpi3] ||
+    [have_board imx53_qsb_tz]} {
 
 	puts "Run script is not supported on this platform."
+	exit 0
+}
+
+if {[get_cmd_switch --autopilot] && ([have_board riscv_qemu] ||
+                                     [have_board zynq_qemu])} {
+	puts "Autopilot mode is not supported on this platform."
 	exit 0
 }
 
@@ -57,9 +63,9 @@ install_config {
 		<route>
 			<service name="ROM" label="config"> <parent label="drivers.config"/> </service>
 			<service name="Timer"> <child name="timer"/> </service>
+			<service name="Uplink"> <child name="nic_router"/> </service>
 			<any-service> <parent/> </any-service>
 		</route>
-		<provides> <service name="Nic"/> </provides>
 	</start>
 
 	<start name="dynamic_rom">
@@ -80,7 +86,7 @@ install_config {
 
 	<policy label_prefix="flood_links" domain="flood_links"/>
 	<policy label_prefix="ping"        domain="flood_links"/>
-	<uplink                            domain="uplink"/>
+	<policy label_prefix="drivers"     domain="uplink"/>
 
 	<domain name="uplink" interface="10.0.2.15/24" gateway="10.0.2.2" verbose_packets="no">
 		<nat domain="flood_links" udp-ports="16384"
@@ -114,7 +120,7 @@ install_config {
 
 	<policy label_prefix="flood_links" domain="flood_links"/>
 	<policy label_prefix="ping"        domain="flood_links"/>
-	<uplink                            domain="uplink"/>
+	<policy label_prefix="drivers"     domain="uplink"/>
 
 	<domain name="uplink" verbose_packets="no">
 		<nat domain="flood_links" udp-ports="16384"
@@ -142,10 +148,12 @@ install_config {
 
 	<start name="nic_router" caps="200">
 		<resource name="RAM" quantum="10M"/>
-		<provides><service name="Nic"/></provides>
+		<provides>
+			<service name="Nic"/>
+			<service name="Uplink"/>
+		</provides>
 		<route>
 			<service name="ROM" label="config"> <child name="dynamic_rom" label="nic_router.config"/> </service>
-			<service name="Nic"> <child name="drivers"/> </service>
 			<any-service> <parent/> <any-child/> </any-service>
 		</route>
 	</start>

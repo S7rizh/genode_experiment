@@ -15,12 +15,10 @@
 #ifndef _CORE__SPEC__SMP__KERNEL__LOCK_H_
 #define _CORE__SPEC__SMP__KERNEL__LOCK_H_
 
-namespace Kernel
-{
-	class Lock;
+/* Genode includes */
+#include <base/lock_guard.h>
 
-	Lock & data_lock();
-}
+namespace Kernel { class Lock; }
 
 
 class Kernel::Lock

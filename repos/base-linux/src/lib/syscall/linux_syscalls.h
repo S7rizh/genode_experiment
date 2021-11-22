@@ -84,8 +84,7 @@ extern "C" void wait_for_continue(void);
  *********************************************************/
 
 extern "C" long lx_syscall(int number, ...);
-extern "C" int  lx_clone(int (*fn)(void *), void *child_stack,
-                         int flags, void *arg);
+extern "C" int  lx_clone(int (*fn)(), void *child_stack, int flags);
 
 
 /*****************************************
@@ -118,7 +117,7 @@ inline int lx_dup(int fd)
 
 inline int lx_dup2(int fd, int to)
 {
-	return lx_syscall(SYS_dup2, fd, to);
+	return lx_syscall(SYS_dup3, fd, to, 0);
 }
 
 
@@ -237,7 +236,7 @@ struct Lx_socketpair
 
 inline Lx_epoll_sd lx_epoll_create()
 {
-	int const ret = lx_syscall(SYS_epoll_create, 1);
+	int const ret = lx_syscall(SYS_epoll_create1, 0);
 	if (ret < 0) {
 		/*
 		 * No recovery possible, just leave a diagnostic message and block
@@ -259,7 +258,7 @@ inline int lx_epoll_ctl(Lx_epoll_sd epoll, int op, Lx_sd fd, epoll_event *event)
 inline int lx_epoll_wait(Lx_epoll_sd epoll, struct epoll_event *events,
                          int maxevents, int timeout)
 {
-	return lx_syscall(SYS_epoll_wait, epoll.value, events, maxevents, timeout);
+	return lx_syscall(SYS_epoll_pwait, epoll.value, events, maxevents, timeout, 0);
 }
 
 
@@ -357,7 +356,7 @@ inline int lx_sigaction(int signum, void (*handler)(int), bool altstack)
 	 * with EINTR. We therefore set the SA_RESTART flag in signal handlers.
 	 */
 
-#ifdef _LP64
+#ifdef __x86_64__
 	/*
 	 * The SA_RESTORER flag is not officially documented, but used internally
 	 * by the glibc implementation of sigaction(). Without specifying this flag
@@ -404,18 +403,12 @@ inline int lx_sigaltstack(void *signal_stack, Genode::size_t stack_size)
 }
 
 
-inline int lx_create_thread(void (*entry)(), void *stack, void *arg)
+inline int lx_create_thread(void (*entry)(), void *stack)
 {
 	int flags = CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND
 	          | CLONE_THREAD | CLONE_SYSVSEM;
 
-	/*
-	 * The syscall binding for clone does not exist in the FreeBSD libc, which
-	 * we are using as libc for Genode. In glibc, clone is implemented as a
-	 * assembler binding without external libc references. Hence, we are safe
-	 * to rely on the glibc version of 'clone' here.
-	 */
-	return lx_clone((int (*)(void *))entry, stack, flags, arg);
+	return lx_clone((int (*)())entry, stack, flags);
 }
 
 

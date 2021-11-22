@@ -5,7 +5,7 @@
 
 	<config verbose_domain_state="yes">
 		<default-policy domain="default" />
-		<uplink         domain="uplink"  />
+		<nic-client     domain="uplink"  />
 		<domain name="uplink">
 			<nat domain="default"
 			     tcp-ports="1000"
@@ -15,7 +15,7 @@
 		<domain name="default" interface="10.0.1.1/24">
 			<dhcp-server ip_first="10.0.1.2"
 			             ip_last="10.0.1.200"
-			             dns_server_from="uplink"/>
+			             dns_config_from="uplink"/>
 			<tcp dst="0.0.0.0/0"><permit-any domain="uplink"/></tcp>
 			<udp dst="0.0.0.0/0"><permit-any domain="uplink"/></udp>
 			<icmp dst="0.0.0.0/0" domain="uplink"/>

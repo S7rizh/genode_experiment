@@ -20,8 +20,8 @@
 #include <util/misc_math.h>
 #include <util/register.h>
 
-namespace Sv39
-{
+namespace Sv39 {
+
 	using namespace Genode;
 
 	enum {
@@ -50,6 +50,7 @@ namespace Sv39
 	struct Block_descriptor;
 }
 
+
 struct Sv39::Descriptor : Register<64>
 {
 	enum Descriptor_type { INVALID, TABLE, BLOCK };
@@ -59,6 +60,8 @@ struct Sv39::Descriptor : Register<64>
 	struct X : Bitfield<3, 1> { }; /* executable */
 	struct U : Bitfield<4, 1> { }; /* user */
 	struct G : Bitfield<5, 1> { }; /* global  */
+	struct A : Bitfield<6, 1> { }; /* access bit */
+	struct D : Bitfield<7, 1> { }; /* dirty bit */
 
 	struct Perm : Bitfield<0, 5> { };
 	struct Type : Bitfield<1, 3>
@@ -103,6 +106,7 @@ struct Sv39::Descriptor : Register<64>
 		return V::get(v); }
 };
 
+
 struct Sv39::Table_descriptor : Descriptor
 {
 	static access_t create(void * const pa)
@@ -118,6 +122,7 @@ struct Sv39::Table_descriptor : Descriptor
 	}
 };
 
+
 struct Sv39::Block_descriptor : Descriptor
 {
 	static access_t create(Hw::Page_flags const &f, addr_t const pa)
@@ -127,11 +132,21 @@ struct Sv39::Block_descriptor : Descriptor
 
 		Ppn::set(desc, base);
 		Perm::set(desc, permission_bits(f));
+
+		/*
+		 * Always set access and dirty bits because RISC-V may raise a page fault
+		 * (implementation dependend) in case it observes this bits being cleared.
+		 */
+		A::set(desc, 1);
+		if (f.writeable)
+			D::set(desc, 1);
+
 		V::set(desc, 1);
 
 		return desc;
 	}
 };
+
 
 template <typename ENTRY, unsigned BLOCK_SIZE_LOG2, unsigned SIZE_LOG2>
 class Sv39::Level_x_translation_table
@@ -343,6 +358,7 @@ class Sv39::Level_x_translation_table
 		}
 }  __attribute__((aligned(1 << ALIGNM_LOG2)));
 
+
 namespace Sv39 {
 
 	/**
@@ -389,6 +405,7 @@ namespace Sv39 {
 			desc = 0; }
 	};
 }
+
 
 namespace Hw {
 

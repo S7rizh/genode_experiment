@@ -1,5 +1,5 @@
-INC_DIR += $(REP_DIR)/src/core/spec/imx8q_evk
-INC_DIR += $(REP_DIR)/src/core/spec/arm/virtualization
+REP_INC_DIR += src/core/board/imx8q_evk
+REP_INC_DIR += src/core/spec/arm/virtualization
 
 # add C++ sources
 SRC_CC += kernel/vm_thread_on.cc
@@ -16,4 +16,4 @@ SRC_S += spec/arm_v8/virtualization/exception_vector.s
 NR_OF_CPUS = 4
 
 # include less specific configuration
-include $(REP_DIR)/lib/mk/spec/arm_v8/core-hw.inc
+include $(call select_from_repositories,lib/mk/spec/arm_v8/core-hw.inc)

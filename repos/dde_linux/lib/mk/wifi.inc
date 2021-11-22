@@ -11,7 +11,7 @@ SHARED_LIB = yes
 # wifi_include *must* be the first library, otherwise the include
 # order is wrong
 #
-LIBS  += wifi_include lx_kit_setjmp
+LIBS  += wifi_include lx_kit_setjmp nic_driver
 
 LD_OPT += --version-script=$(LIB_DIR)/symbol.map
 
@@ -20,7 +20,7 @@ SRC_CC += dummies.cc init.cc lxcc_emul.cc nic.cc socket_call.cc random.cc \
 
 # lx_kit
 SRC_CC += mapped_io_mem_range.cc irq.cc pci.cc malloc.cc scheduler.cc \
-          work.cc timer.cc printf.cc env.cc
+          work.cc timer.cc printf.cc bug.cc env.cc
 
 SRC_C += lxc_emul.c dummies_new.c
 
@@ -129,6 +129,6 @@ vpath %.c  $(WIFI_DIR)
 vpath %.c  $(WIFI_CONTRIB_DIR)
 vpath %.c  $(LIB_DIR)
 vpath %.cc $(LIB_DIR)
-vpath %.cc $(REP_DIR)/src/lx_kit
+vpath %.cc $(REP_DIR)/src/lib/legacy/lx_kit
 
 # vi: set ft=make :

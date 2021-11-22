@@ -32,7 +32,7 @@
 
 inline int lx_mkdir(char const *pathname, mode_t mode)
 {
-	return lx_syscall(SYS_mkdir, pathname, mode);
+	return lx_syscall(SYS_mkdirat, AT_FDCWD, pathname, mode);
 }
 
 
@@ -44,7 +44,7 @@ inline int lx_ftruncate(int fd, unsigned long length)
 
 inline int lx_unlink(const char *fname)
 {
-	return lx_syscall(SYS_unlink, fname);
+	return lx_syscall(SYS_unlinkat, AT_FDCWD, fname, 0);
 }
 
 
@@ -52,19 +52,30 @@ inline int lx_unlink(const char *fname)
  ** Functions used by core's rom-session support code **
  *******************************************************/
 
-inline int lx_open(const char *pathname, int flags, mode_t mode = 0)
+inline int lx_open(char const *pathname, int flags, mode_t mode = 0)
 {
-	return lx_syscall(SYS_open, pathname, flags, mode);
+	return lx_syscall(SYS_openat, AT_FDCWD, pathname, flags, mode);
 }
 
 
-inline int lx_stat(const char *path, struct stat64 *buf)
+inline int lx_stat_size(char const *path, Genode::uint64_t &out_size)
 {
-#ifdef _LP64
-	return lx_syscall(SYS_stat, path, buf);
+#ifdef __aarch64__
+	struct statx buf { };
+	int result = lx_syscall(SYS_statx, AT_FDCWD, path, 0, STATX_SIZE, &buf);
+	out_size = buf.stx_size;
 #else
-	return lx_syscall(SYS_stat64, path, buf);
+#ifdef _LP64
+	struct stat buf { };
+	int result = lx_syscall(SYS_stat, path, &buf);
+	out_size = buf.st_size;
+#else
+	struct stat64 buf { };
+	int result = lx_syscall(SYS_stat64, path, &buf);
+	out_size = buf.st_size;
 #endif
+#endif
+	return result;
 }
 
 
@@ -119,7 +130,7 @@ inline int lx_kill(int pid, int signal)
 }
 
 
-inline int lx_create_process(int (*entry)(void *), void *stack, void *arg)
+inline int lx_create_process(int (*entry)(), void *stack)
 {
 	/*
 	 * The low byte of the flags denotes the signal to be sent to the parent
@@ -127,7 +138,7 @@ inline int lx_create_process(int (*entry)(void *), void *stack, void *arg)
 	 * this condition.
 	 */
 	int const flags = CLONE_VFORK | LX_SIGCHLD;
-	return lx_clone((int (*)(void *))entry, stack, flags, arg);
+	return lx_clone((int (*)())entry, stack, flags);
 }
 
 
@@ -253,7 +264,7 @@ inline int lx_connect(int sockfd, const struct sockaddr *serv_addr,
 
 inline int lx_pipe(int pipefd[2])
 {
-	return lx_syscall(SYS_pipe, pipefd);
+	return lx_syscall(SYS_pipe2, pipefd, 0);
 }
 
 

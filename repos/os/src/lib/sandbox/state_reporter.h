@@ -16,10 +16,11 @@
 
 /* Genode includes */
 #include <timer_session/connection.h>
-#include <os/sandbox.h>
+#include <sandbox/sandbox.h>
 
 /* local includes */
 #include "report.h"
+#include "child.h"
 
 namespace Sandbox { class State_reporter; }
 
@@ -28,10 +29,14 @@ class Sandbox::State_reporter : public Report_update_trigger
 {
 	public:
 
+		typedef String<64> Version;
+
 		struct Producer : Interface
 		{
 			virtual void produce_state_report(Xml_generator &xml,
 			                                  Report_detail const &) const = 0;
+
+			virtual Child::Sample_state_result sample_children_state() = 0;
 		};
 
 	private:
@@ -50,7 +55,6 @@ class Sandbox::State_reporter : public Report_update_trigger
 		uint64_t _report_period_ms = 0;
 
 		/* version string from config, to be reflected in the report */
-		typedef String<64> Version;
 		Version _version { };
 
 		Constructible<Timer::Connection> _timer          { };
@@ -60,7 +64,7 @@ class Sandbox::State_reporter : public Report_update_trigger
 			_env.ep(), *this, &State_reporter::_handle_timer };
 
 		Signal_handler<State_reporter> _timer_periodic_handler {
-			_env.ep(), *this, &State_reporter::_handle_timer };
+			_env.ep(), *this, &State_reporter::_handle_periodic_timer };
 
 		Signal_handler<State_reporter> _immediate_handler {
 			_env.ep(), *this, &State_reporter::_handle_timer };
@@ -68,6 +72,21 @@ class Sandbox::State_reporter : public Report_update_trigger
 		bool _scheduled = false;
 
 		State_handler &_state_handler;
+
+		bool _periodic_sampling_needed() const
+		{
+			return _report_detail->child_ram()
+			    || _report_detail->child_caps();
+		}
+
+		void _handle_periodic_timer()
+		{
+			if (!_periodic_sampling_needed())
+				return;
+
+			if (_producer.sample_children_state() == Child::Sample_state_result::CHANGED)
+				_handle_timer();
+		}
 
 		void _handle_timer()
 		{
@@ -93,22 +112,18 @@ class Sandbox::State_reporter : public Report_update_trigger
 				_producer.produce_state_report(xml, *_report_detail);
 		}
 
-		void apply_config(Xml_node config)
+		void apply_config(Version const &version, Xml_node const &report)
 		{
-			try {
-				Xml_node report = config.sub_node("report");
-
+			if (report.type() == "report") {
 				_report_detail.construct(report);
 				_report_delay_ms = report.attribute_value("delay_ms", 100UL);
-			}
-			catch (Xml_node::Nonexistent_sub_node) {
+			} else {
 				_report_detail.construct();
 				_report_delay_ms = 0;
 			}
 
 			bool trigger_update = false;
 
-			Version const version = config.attribute_value("version", Version());
 			if (version != _version) {
 				_version = version;
 				trigger_update = true;
@@ -140,8 +155,7 @@ class Sandbox::State_reporter : public Report_update_trigger
 			 */
 			uint64_t const period_ms           = max(1000U, _report_delay_ms);
 			bool     const period_changed      = (_report_period_ms != period_ms);
-			bool     const report_periodically = _report_detail->child_ram()
-			                                  || _report_detail->child_caps();
+			bool     const report_periodically = _periodic_sampling_needed();
 
 			if (report_periodically && !_timer_periodic.constructed()) {
 				_timer_periodic.construct(_env);

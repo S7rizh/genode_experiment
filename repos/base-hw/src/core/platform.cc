@@ -13,24 +13,27 @@
  */
 
 
-/* core includes */
+/* base Core includes */
 #include <boot_modules.h>
 #include <core_log.h>
-#include <hw/memory_region.h>
+
+/* base-hw Core includes */
 #include <map_local.h>
 #include <platform.h>
 #include <platform_pd.h>
+#include <kernel/main.h>
+
+/* base-hw internal includes */
 #include <hw/page_flags.h>
 #include <hw/util.h>
-#include <kernel/kernel.h>
-#include <translation_table.h>
-#include <kernel/cpu.h>
+#include <hw/memory_region.h>
 
-/* base-internal includes */
+/* base internal includes */
 #include <base/internal/crt0.h>
 #include <base/internal/stack_area.h>
+#include <base/internal/unmanaged_singleton.h>
 
-/* Genode includes */
+/* base includes */
 #include <base/log.h>
 #include <trace/source_registry.h>
 
@@ -44,11 +47,14 @@ using namespace Genode;
 Hw::Boot_info<Board::Boot_info> const & Platform::_boot_info() {
 	return *reinterpret_cast<Hw::Boot_info<Board::Boot_info>*>(Hw::Mm::boot_info().base); }
 
+
 addr_t Platform::mmio_to_virt(addr_t mmio) {
 	return _boot_info().mmio_space.virt_addr(mmio); }
 
+
 addr_t Platform::core_page_table() {
 	return (addr_t)_boot_info().table; }
+
 
 Hw::Page_table::Allocator & Platform::core_page_table_allocator()
 {
@@ -59,11 +65,17 @@ Hw::Page_table::Allocator & Platform::core_page_table_allocator()
 	                                              virt_addr);
 }
 
+
+addr_t Platform::core_main_thread_phys_utcb()
+{
+	return core_phys_addr(_boot_info().core_main_thread_utcb);
+}
+
 void Platform::_init_io_mem_alloc()
 {
 	/* add entire adress space minus the RAM memory regions */
 	_io_mem_alloc.add_range(0, ~0x0UL);
-	_boot_info().ram_regions.for_each([this] (Hw::Memory_region const &r) {
+	_boot_info().ram_regions.for_each([this] (unsigned, Hw::Memory_region const &r) {
 		_io_mem_alloc.remove_range(r.base, r.size); });
 };
 
@@ -78,7 +90,7 @@ Hw::Memory_region_array const & Platform::_core_virt_regions()
 addr_t Platform::core_phys_addr(addr_t virt)
 {
 	addr_t ret = 0;
-	_boot_info().elf_mappings.for_each([&] (Hw::Mapping const & m)
+	_boot_info().elf_mappings.for_each([&] (unsigned, Hw::Mapping const & m)
 	{
 		if (virt >= m.virt() && virt < (m.virt() + m.size()))
 			ret = (virt - m.virt()) + m.phys();
@@ -128,7 +140,10 @@ void Platform::_init_platform_info()
 	Genode::Xml_generator xml(reinterpret_cast<char *>(virt_addr),
 	                          rom_size, rom_name, [&] ()
 	{
-		xml.node("kernel", [&] () { xml.attribute("name", "hw"); });
+		xml.node("kernel", [&] () {
+			xml.attribute("name", "hw");
+			xml.attribute("acpi", true);
+		});
 		_init_additional_platform_info(xml);
 		xml.node("affinity-space", [&] () {
 			xml.attribute("width", affinity_space().width());
@@ -158,11 +173,11 @@ Platform::Platform()
 
 	_core_mem_alloc.virt_alloc().add_range(Hw::Mm::core_heap().base,
 	                                       Hw::Mm::core_heap().size);
-	_core_virt_regions().for_each([this] (Hw::Memory_region const & r) {
+	_core_virt_regions().for_each([this] (unsigned, Hw::Memory_region const & r) {
 		_core_mem_alloc.virt_alloc().remove_range(r.base, r.size); });
-	_boot_info().elf_mappings.for_each([this] (Hw::Mapping const & m) {
+	_boot_info().elf_mappings.for_each([this] (unsigned, Hw::Mapping const & m) {
 		_core_mem_alloc.virt_alloc().remove_range(m.virt(), m.size()); });
-	_boot_info().ram_regions.for_each([this] (Hw::Memory_region const & region) {
+	_boot_info().ram_regions.for_each([this] (unsigned, Hw::Memory_region const & region) {
 		_core_mem_alloc.phys_alloc().add_range(region.base, region.size); });
 
 	_init_io_port_alloc();
@@ -170,14 +185,12 @@ Platform::Platform()
 	/* make all non-kernel interrupts available to the interrupt allocator */
 	for (unsigned i = 0; i < Board::Pic::NR_OF_IRQ; i++) {
 		bool kernel_resource = false;
-		Kernel::cpu_pool().for_each_cpu([&] (Kernel::Cpu & cpu) {
-			if (i == cpu.timer().interrupt_id()) {
+		_boot_info().kernel_irqs.for_each([&] (unsigned /*idx*/,
+		                                       unsigned kernel_irq) {
+			if (i == kernel_irq) {
 				kernel_resource = true;
 			}
 		});
-		if (i == Board::Pic::IPI) {
-			kernel_resource = true;
-		}
 		if (kernel_resource) {
 			continue;
 		}
@@ -211,39 +224,47 @@ Platform::Platform()
 		init_core_log(Core_log_range { core_local_addr, log_size } );
 	}
 
-	struct Trace_source : public  Trace::Source::Info_accessor,
-	                      private Trace::Control,
-	                      private Trace::Source
+	class Idle_thread_trace_source : public  Trace::Source::Info_accessor,
+	                                 private Trace::Control,
+	                                 private Trace::Source
 	{
-		Kernel::Thread          &thread;
-		Affinity::Location const affinity;
+		private:
 
-		/**
-		 * Trace::Source::Info_accessor interface
-		 */
-		Info trace_source_info() const override
-		{
-			Trace::Execution_time execution_time { thread.execution_time(), 0 };
-			return { Session_label("kernel"), thread.label(), execution_time,
-			         affinity };
-		}
+			Affinity::Location const _affinity;
 
-		Trace_source(Trace::Source_registry &registry,
-		             Kernel::Thread &thread, Affinity::Location affinity)
-		:
-			Trace::Control(),
-			Trace::Source(*this, *this),
-			thread(thread), affinity(affinity)
-		{
-			registry.insert(this);
-		}
+		public:
+
+			/**
+			 * Trace::Source::Info_accessor interface
+			 */
+			Info trace_source_info() const override
+			{
+				Trace::Execution_time execution_time {
+					Kernel::main_read_idle_thread_execution_time(
+						_affinity.xpos()), 0 };
+
+				return { Session_label("kernel"), "idle",
+				         execution_time, _affinity };
+			}
+
+			Idle_thread_trace_source(Trace::Source_registry &registry,
+			                         Affinity::Location affinity)
+			:
+				Trace::Control { },
+				Trace::Source  { *this, *this },
+				_affinity      { affinity }
+			{
+				registry.insert(this);
+			}
 	};
 
 	/* create trace sources for idle threads */
-	Kernel::cpu_pool().for_each_cpu([&] (Kernel::Cpu & cpu) {
-		new (core_mem_alloc()) Trace_source(Trace::sources(), cpu.idle_thread(),
-		                                    Affinity::Location(cpu.id(), 0));
-	});
+	for (unsigned cpu_idx = 0; cpu_idx < _boot_info().cpus; cpu_idx++) {
+
+		new (core_mem_alloc())
+			Idle_thread_trace_source(
+				Trace::sources(), Affinity::Location(cpu_idx, 0));
+	}
 
 	log(_rom_fs);
 }
@@ -252,23 +273,6 @@ Platform::Platform()
 /****************************************
  ** Support for core memory management **
  ****************************************/
-
-bool Genode::map_local(addr_t from_phys, addr_t to_virt, size_t num_pages,
-                       Page_flags flags)
-{
-	Platform_pd &pd = Kernel::core_pd().platform_pd();
-	return pd.insert_translation(to_virt, from_phys,
-	                             num_pages * get_page_size(), flags);
-}
-
-
-bool Genode::unmap_local(addr_t virt_addr, size_t num_pages)
-{
-	Platform_pd &pd = Kernel::core_pd().platform_pd();
-	pd.flush(virt_addr, num_pages * get_page_size());
-	return true;
-}
-
 
 bool Mapped_mem_allocator::_map_local(addr_t virt_addr, addr_t phys_addr,
                                       unsigned size) {

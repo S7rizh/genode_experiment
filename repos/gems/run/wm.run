@@ -94,7 +94,7 @@ install_config {
 				<config initial_width="500" initial_height="400" />
 			</launcher>
 			<launcher name="nitpicker" ram_quota="1M" caps="100">
-				<config>
+				<config request_framebuffer="yes" request_input="yes">
 					<domain name="default" layer="2" content="client"
 					        label="no" hover="always" focus="click"/>
 					<default-policy domain="default"/>
@@ -129,7 +129,7 @@ install_config {
 
 	<start name="wm_backdrop" priority="-1">
 		<binary name="backdrop" />
-		<resource name="RAM" quantum="24M"/>
+		<resource name="RAM" quantum="32M"/>
 		<config>
 			<libc/>
 			<vfs>
@@ -154,7 +154,7 @@ set fd [open [run_dir]/genode/focus w]
 puts $fd "<focus label=\"wm -> focus\"/>"
 close $fd
 
-file copy -force [genode_dir]/repos/gems/recipes/raw/motif_wm/wm.config [run_dir]/genode/
+copy_file [genode_dir]/repos/gems/recipes/raw/motif_wm/wm.config [run_dir]/genode/
 
 build { app/window_layouter app/decorator server/nitpicker server/wm test/nitpicker }
 

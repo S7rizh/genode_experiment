@@ -15,19 +15,23 @@
 #ifndef _SRC__DRIVERS__USB_MODEM__DRIVER_H_
 #define _SRC__DRIVERS__USB_MODEM__DRIVER_H_
 
+/* Genode includes */
 #include <base/allocator_avl.h>
 #include <base/attached_rom_dataspace.h>
 #include <base/heap.h>
 #include <usb_session/connection.h>
-#include <lx_kit/scheduler.h>
+#include <util/reconstructible.h>
 
-#include <component.h>
+/* local includes */
+#include <uplink_client.h>
 #include <terminal.h>
 
+/* Linux emulation environment includes */
+#include <legacy/lx_kit/scheduler.h>
 #include <lx_emul.h>
-#include <lx_emul/extern_c_begin.h>
+#include <legacy/lx_emul/extern_c_begin.h>
 #include <linux/usb.h>
-#include <lx_emul/extern_c_end.h>
+#include <legacy/lx_emul/extern_c_end.h>
 
 struct usb_device_id;
 struct usb_interface;
@@ -144,18 +148,26 @@ struct Driver
 			}
 	};
 
-
-	Devices                         devices;
-	Genode::Env                    &env;
-	Genode::Entrypoint             &ep             { env.ep() };
-	Genode::Heap                    heap           { env.ram(), env.rm() };
-	Genode::Allocator_avl           alloc          { &heap };
-	Root                            root           { env, heap };
-	Terminal::Root                  terminal_root  { env, heap };
-	Genode::Constructible<Task>     main_task;
-	Genode::Constructible<Genode::Attached_rom_dataspace> report_rom;
+	Devices                                                devices;
+	Genode::Env                                           &env;
+	Genode::Entrypoint                                    &ep             { env.ep() };
+	Genode::Attached_rom_dataspace                         config_rom     { env, "config" };
+	Genode::Heap                                           heap           { env.ram(), env.rm() };
+	Genode::Allocator_avl                                  alloc          { &heap };
+	Genode::Constructible<Genode::Uplink_client>           uplink_client  { };
+	Terminal::Root                                         terminal_root  { env, heap };
+	Genode::Constructible<Task>                            main_task;
+	Genode::Constructible<Genode::Attached_rom_dataspace>  report_rom;
 
 	Driver(Genode::Env &env);
+
+	void activate_network_session()
+	{
+		uplink_client.construct(
+			env, heap,
+			config_rom.xml().attribute_value(
+				"uplink_label", Genode::Session_label::String { "" }));
+	}
 
 	static void main_task_entry(void *);
 };

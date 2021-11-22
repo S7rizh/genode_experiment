@@ -25,9 +25,10 @@
 
 /* kernel includes */
 #include <kernel/pd.h>
-#include <kernel/kernel.h>
+#include <kernel/main.h>
 
 using namespace Genode;
+
 
 void Platform_thread::_init() { }
 
@@ -61,13 +62,13 @@ void Platform_thread::quota(size_t const quota)
 Platform_thread::Platform_thread(Label const &label, Native_utcb &utcb)
 :
 	_label(label),
-	_pd(&Kernel::core_pd().platform_pd()),
+	_pd(&_kernel_main_get_core_platform_pd()),
 	_pager(nullptr),
 	_utcb_core_addr(&utcb),
 	_utcb_pd_addr(&utcb),
 	_main_thread(false),
 	_location(Affinity::Location()),
-	_kobj(true, _label.string())
+	_kobj(_kobj.CALLED_FROM_CORE, _label.string())
 {
 	/* create UTCB for a core thread */
 	void *utcb_phys;
@@ -94,7 +95,7 @@ Platform_thread::Platform_thread(size_t             const  quota,
 	_quota(quota),
 	_main_thread(false),
 	_location(location),
-	_kobj(true, _priority, _quota, _label.string())
+	_kobj(_kobj.CALLED_FROM_CORE, _priority, _quota, _label.string())
 {
 	try {
 		_utcb = core_env().pd_session()->alloc(sizeof(Native_utcb), CACHED);

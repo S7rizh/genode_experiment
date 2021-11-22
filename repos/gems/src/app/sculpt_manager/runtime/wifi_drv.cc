@@ -15,9 +15,9 @@
 
 void Sculpt::gen_wifi_drv_start_content(Xml_generator &xml)
 {
-	gen_common_start_content(xml, "wifi_drv", Cap_quota{200}, Ram_quota{32*1024*1024});
-
-	gen_provides<Nic::Session>(xml);
+	gen_common_start_content(xml, "wifi_drv",
+	                         Cap_quota{200}, Ram_quota{32*1024*1024},
+	                         Priority::NETWORK);
 
 	xml.node("config", [&] () {
 
@@ -25,11 +25,13 @@ void Sculpt::gen_wifi_drv_start_content(Xml_generator &xml)
 			gen_named_node(xml, "dir", "dev", [&] () {
 				xml.node("null", [&] () {});
 				xml.node("zero", [&] () {});
-				xml.node("rtc",  [&] () {});
 				xml.node("log",  [&] () {});
 				xml.node("null", [&] () {});
 				gen_named_node(xml, "jitterentropy", "random");
 				gen_named_node(xml, "jitterentropy", "urandom"); });
+				gen_named_node(xml, "inline", "rtc", [&] () {
+					xml.append("2018-01-01 00:01");
+				});
 		});
 
 		xml.node("libc", [&] () {
@@ -40,6 +42,14 @@ void Sculpt::gen_wifi_drv_start_content(Xml_generator &xml)
 	});
 
 	xml.node("route", [&] () {
+
+		xml.node("service", [&] () {
+			xml.attribute("name", "Uplink");
+			xml.node("child", [&] () {
+				xml.attribute("name", "nic_router");
+			});
+		});
+
 		gen_service_node<Platform::Session>(xml, [&] () {
 			xml.node("parent", [&] () {
 				xml.attribute("label", "wifi"); }); });

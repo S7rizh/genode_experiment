@@ -29,7 +29,7 @@ _eglGetDriverProc T
 _eglGetNativePlatform T
 _eglGetResource T
 _eglGetSyncAttrib T
-_eglGlobal D 112
+_eglGlobal D 136
 _eglInitConfig T
 _eglInitContext T
 _eglInitDriverFallbacks T

@@ -16,15 +16,15 @@
 #include <driver.h>
 #include <lx_emul.h>
 
-#include <lx_kit/env.h>
-#include <lx_kit/malloc.h>
-#include <lx_kit/scheduler.h>
-#include <lx_kit/timer.h>
-#include <lx_kit/work.h>
+#include <legacy/lx_kit/env.h>
+#include <legacy/lx_kit/malloc.h>
+#include <legacy/lx_kit/scheduler.h>
+#include <legacy/lx_kit/timer.h>
+#include <legacy/lx_kit/work.h>
 
-#include <lx_emul/extern_c_begin.h>
+#include <legacy/lx_emul/extern_c_begin.h>
 #include <linux/usb.h>
-#include <lx_emul/extern_c_end.h>
+#include <legacy/lx_emul/extern_c_end.h>
 
 struct workqueue_struct *tasklet_wq;
 
@@ -74,7 +74,7 @@ void Driver::Device::scan_interfaces(unsigned iface_idx)
 	probe_interface(iface, &id);
 	udev->config->interface[iface_idx] = iface;
 
-	driver.env.parent().announce(driver.ep.manage(driver.root));
+	driver.activate_network_session();
 };
 
 
@@ -195,6 +195,9 @@ Driver::Driver(Genode::Env &env) : env(env)
 {
 	Genode::log("--- USB net driver ---");
 
+	if (mode == Genode::Nic_driver_mode::NIC_SERVER) {
+		root.construct(env, heap);
+	}
 	Lx_kit::construct_env(env);
 	Lx::scheduler(&env);
 	Lx::malloc_init(env, heap);

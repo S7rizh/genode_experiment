@@ -17,13 +17,14 @@
 #include <base/allocator.h>
 #include <io_mem_session/connection.h>
 #include <irq_session/connection.h>
-#include <platform_session/platform_session.h>
+#include <platform_session/device.h>
 #include <util/list.h>
 #include <util/list_model.h>
 #include <util/reconstructible.h>
 #include <util/xml_generator.h>
 
 namespace Driver {
+
 	using namespace Genode;
 
 	class  Env;
@@ -70,20 +71,22 @@ class Driver::Device : private List_model<Device>::Element
 			: name(name), value(value) {}
 		};
 
-		using Name = Genode::String<64>;
+		using Name  = Genode::String<64>;
+		using Type  = Genode::String<64>;
+		using Range = Platform::Device_interface::Range;
 
-		Device(Name name);
+		Device(Name name, Type type);
 		virtual ~Device();
 
 		Name name() const;
+		Type type() const;
 
 		virtual bool acquire(Session_component &);
 		virtual void release(Session_component &);
 
-		Irq_session_capability    irq(unsigned idx,
-		                              Session_component & session);
-		Io_mem_session_capability io_mem(unsigned idx, Cache_attribute,
-		                                 Session_component & session);
+		Irq_session_capability    irq(unsigned idx, Session_component &);
+		Io_mem_session_capability io_mem(unsigned idx, Range &, Cache,
+		                                 Session_component &);
 
 		void report(Xml_generator &, Session_component &);
 
@@ -100,6 +103,7 @@ class Driver::Device : private List_model<Device>::Element
 		friend class List<Device>;
 
 		Name                     _name;
+		Type                     _type;
 		Platform::Session::Label _session {};
 		List_model<Io_mem>       _io_mem_list {};
 		List_model<Irq>          _irq_list {};
@@ -145,8 +149,11 @@ class Driver::Device_model :
 		Device &    create_element(Xml_node node);
 		void        update_element(Device & device, Xml_node node);
 		static bool element_matches_xml_node(Device const & dev,
-		                                     Genode::Xml_node n) {
-			return dev.name() == n.attribute_value("name", Device::Name()); }
+		                                     Genode::Xml_node n)
+		{
+			return dev.name() == n.attribute_value("name", Device::Name()) &&
+			       dev.type() == n.attribute_value("type", Device::Type());
+		}
 
 		static bool node_is_element(Genode::Xml_node node) {
 			return node.has_type("device"); }

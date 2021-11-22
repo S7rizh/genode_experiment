@@ -105,11 +105,9 @@ void User_state::_handle_input_event(Input::Event ev)
 	ev.handle_absolute_motion([&] (int x, int y) {
 		_pointer_pos = Point(x, y); });
 
-	bool const drag = _key_cnt > 0;
-
 	/* count keys */
-	if (ev.press())           _key_cnt++;
-	if (ev.release() && drag) _key_cnt--;
+	if (ev.press()) _key_cnt++;
+	if (ev.release() && (_key_cnt > 0)) _key_cnt--;
 
 	/* track key states */
 	ev.handle_press([&] (Keycode key, Codepoint) {
@@ -124,8 +122,24 @@ void User_state::_handle_input_event(Input::Event ev)
 		_key_array.pressed(key, false);
 	});
 
-	if (ev.absolute_motion() || ev.relative_motion())
+	if (ev.absolute_motion() || ev.relative_motion()) {
 		update_hover();
+
+		if (_key_cnt > 0) {
+			_drag = true;
+
+			/*
+			 * Submit leave event to the originally hovered client if motion
+			 * occurs while a key is held. Otherwise, both the hovered client
+			 * and the receiver of the key sequence would observe a motion
+			 * event last, each appearing as being hovered at the same time.
+			 */
+			if (_hovered && (_input_receiver != _hovered)) {
+				_hovered->submit_input_event(Hover_leave());
+				_hovered = nullptr; /* updated when _key_cnt reaches 0 */
+			}
+		}
+	}
 
 	/*
 	 * Handle start of a key sequence
@@ -252,11 +266,21 @@ void User_state::_handle_input_event(Input::Event ev)
 		_input_receiver->submit_input_event(ev);
 
 	/*
-	 * Detect end of global key sequence
+	 * Detect end of key sequence
 	 */
-	if (ev.release() && (_key_cnt == 0) && _global_key_sequence) {
-		_input_receiver      = _focused;
-		_global_key_sequence = false;
+	if (ev.release() && (_key_cnt == 0)) {
+
+		update_hover();
+
+		if (_drag && _input_receiver && (_input_receiver != _hovered))
+			_input_receiver->submit_input_event(Hover_leave());
+
+		_drag = false;
+
+		if (_global_key_sequence) {
+			_input_receiver      = _focused;
+			_global_key_sequence = false;
+		}
 	}
 }
 
@@ -396,29 +420,39 @@ User_state::Handle_forget_result User_state::forget(View_owner const &owner)
 	_focus.forget(owner);
 
 	bool const need_to_update_all_views = (&owner == _focused);
-	bool const focus_changed = &owner == _focused;
+	bool const focus_vanished = (&owner == _focused);
+	bool const hover_vanished = (&owner == _hovered);
 
-	if (&owner == _focused)      _focused      = nullptr;
-	if (&owner == _next_focused) _next_focused = nullptr;
-	if (&owner == _last_clicked) _last_clicked = nullptr;
+	auto wipe_ptr = [&] (auto &ptr) {
+		if (&owner == ptr)
+			ptr = nullptr; };
+
+	wipe_ptr(_focused);
+	wipe_ptr(_next_focused);
+	wipe_ptr(_last_clicked);
+	wipe_ptr(_hovered);
 
 	Update_hover_result const update_hover_result = update_hover();
 
-	if (_input_receiver == &owner)
-		_input_receiver = nullptr;
+	wipe_ptr(_input_receiver);
 
 	if (need_to_update_all_views)
 		_view_stack.update_all_views();
 
 	return {
-		.hover_changed = update_hover_result.hover_changed,
-		.focus_changed = focus_changed,
+		.hover_changed = update_hover_result.hover_changed
+		               || hover_vanished,
+		.focus_changed = focus_vanished,
 	};
 }
 
 
 User_state::Update_hover_result User_state::update_hover()
 {
+	/* no hover changes while dragging */
+	if (_key_pressed())
+		return { .hover_changed = false };
+
 	View_owner * const old_hovered  = _hovered;
 	View const * const pointed_view = _view_stack.find_view(_pointer_pos);
 
@@ -432,7 +466,7 @@ User_state::Update_hover_result User_state::update_hover()
 		if (old_hovered)
 			old_hovered->submit_input_event(Hover_leave());
 
-		if (_hovered && _key_cnt == 0)
+		if (_hovered)
 			_hovered->submit_input_event(Absolute_motion{_pointer_pos.x(),
 			                                             _pointer_pos.y()});
 	}

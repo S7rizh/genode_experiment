@@ -16,10 +16,10 @@
 #include <kernel/cpu.h>
 #include <kernel/perf_counter.h>
 
+
 void Kernel::Cpu::_arch_init()
 {
-	/* enable performance counter */
-	perf_counter()->enable();
+	enable_performance_counter();
 
 	/* enable timer interrupt */
 	_pic.unmask(_timer.interrupt_id(), id());

@@ -35,6 +35,7 @@ namespace Vfs_cbe {
 
 	class Extend_file_system;
 	class Rekey_file_system;
+	class Deinitialize_file_system;
 	class Create_snapshot_file_system;
 	class Discard_snapshot_file_system;
 
@@ -52,6 +53,32 @@ namespace Vfs_cbe {
 
 	class Backend_file;
 	class Wrapper;
+
+	template <typename T>
+	class Pointer
+	{
+		private:
+
+			T *_obj;
+
+		public:
+
+			struct Invalid : Genode::Exception { };
+
+			Pointer() : _obj(nullptr) { }
+
+			Pointer(T &obj) : _obj(&obj) { }
+
+			T &obj() const
+			{
+				if (_obj == nullptr)
+					throw Invalid();
+
+				return *_obj;
+			}
+
+			bool valid() const { return _obj != nullptr; }
+	};
 }
 
 
@@ -179,6 +206,25 @@ class Vfs_cbe::Wrapper
 			}
 		};
 
+		struct Deinitialize
+		{
+			enum State { IDLE, IN_PROGRESS, };
+			enum Result { NONE, SUCCESS, FAILED, };
+			State    state;
+			Result   last_result;
+			uint32_t key_id;
+
+			static char const *state_to_cstring(State const s)
+			{
+				switch (s) {
+				case State::IDLE:        return "idle";
+				case State::IN_PROGRESS: return "in-progress";
+				}
+
+				return "-";
+			}
+		};
+
 		struct Extending
 		{
 			enum Type { INVALID, VBD, FT };
@@ -220,11 +266,22 @@ class Vfs_cbe::Wrapper
 			.last_result = Rekeying::Result::NONE,
 			.key_id      = 0, };
 
+		Deinitialize _deinit_obj
+		{
+			.state       = Deinitialize::State::IDLE,
+			.last_result = Deinitialize::Result::NONE
+		};
+
 		Extending _extend_obj {
 			.type        = Extending::Type::INVALID,
 			.state       = Extending::State::UNKNOWN,
 			.last_result = Extending::Result::NONE,
 		};
+
+		Pointer<Snapshots_file_system>    _snapshots_fs { };
+		Pointer<Extend_file_system>       _extend_fs    { };
+		Pointer<Rekey_file_system>        _rekey_fs     { };
+		Pointer<Deinitialize_file_system> _deinit_fs    { };
 
 		/* configuration options */
 		bool _verbose       { false };
@@ -306,6 +363,118 @@ class Vfs_cbe::Wrapper
 
 
 	public:
+
+		void manage_snapshots_file_system(Snapshots_file_system &snapshots_fs)
+		{
+			if (_snapshots_fs.valid()) {
+
+				class Already_managing_an_snapshots_file_system { };
+				throw Already_managing_an_snapshots_file_system { };
+			}
+			_snapshots_fs = snapshots_fs;
+		}
+
+		void dissolve_snapshots_file_system(Snapshots_file_system &snapshots_fs)
+		{
+			if (_snapshots_fs.valid()) {
+
+				if (&_snapshots_fs.obj() != &snapshots_fs) {
+
+					class Snapshots_file_system_not_managed { };
+					throw Snapshots_file_system_not_managed { };
+				}
+				_snapshots_fs = Pointer<Snapshots_file_system> { };
+
+			} else {
+
+				class No_snapshots_file_system_managed { };
+				throw No_snapshots_file_system_managed { };
+			}
+		}
+
+		void manage_extend_file_system(Extend_file_system &extend_fs)
+		{
+			if (_extend_fs.valid()) {
+
+				class Already_managing_an_extend_file_system { };
+				throw Already_managing_an_extend_file_system { };
+			}
+			_extend_fs = extend_fs;
+		}
+
+		void dissolve_extend_file_system(Extend_file_system &extend_fs)
+		{
+			if (_extend_fs.valid()) {
+
+				if (&_extend_fs.obj() != &extend_fs) {
+
+					class Extend_file_system_not_managed { };
+					throw Extend_file_system_not_managed { };
+				}
+				_extend_fs = Pointer<Extend_file_system> { };
+
+			} else {
+
+				class No_extend_file_system_managed { };
+				throw No_extend_file_system_managed { };
+			}
+		}
+
+		void manage_rekey_file_system(Rekey_file_system &rekey_fs)
+		{
+			if (_rekey_fs.valid()) {
+
+				class Already_managing_an_rekey_file_system { };
+				throw Already_managing_an_rekey_file_system { };
+			}
+			_rekey_fs = rekey_fs;
+		}
+
+		void dissolve_rekey_file_system(Rekey_file_system &rekey_fs)
+		{
+			if (_rekey_fs.valid()) {
+
+				if (&_rekey_fs.obj() != &rekey_fs) {
+
+					class Rekey_file_system_not_managed { };
+					throw Rekey_file_system_not_managed { };
+				}
+				_rekey_fs = Pointer<Rekey_file_system> { };
+
+			} else {
+
+				class No_rekey_file_system_managed { };
+				throw No_rekey_file_system_managed { };
+			}
+		}
+
+		void manage_deinit_file_system(Deinitialize_file_system &deinit_fs)
+		{
+			if (_deinit_fs.valid()) {
+
+				class Already_managing_an_deinit_file_system { };
+				throw Already_managing_an_deinit_file_system { };
+			}
+			_deinit_fs = deinit_fs;
+		}
+
+		void dissolve_deinit_file_system(Deinitialize_file_system &deinit_fs)
+		{
+			if (_deinit_fs.valid()) {
+
+				if (&_deinit_fs.obj() != &deinit_fs) {
+
+					class Deinitialize_file_system_not_managed { };
+					throw Deinitialize_file_system_not_managed { };
+				}
+				_deinit_fs = Pointer<Deinitialize_file_system> { };
+
+			} else {
+
+				class No_deinit_file_system_managed { };
+				throw No_deinit_file_system_managed { };
+			}
+		}
 
 		Wrapper(Vfs::Env &env, Xml_node config) : _env(env)
 		{
@@ -531,6 +700,14 @@ class Vfs_cbe::Wrapper
 			return progress;
 		}
 
+		void _snapshots_fs_update_snapshot_registry();
+
+		void _extend_fs_trigger_watch_response();
+
+		void _rekey_fs_trigger_watch_response();
+
+		void _deinit_fs_trigger_watch_response();
+
 		bool _handle_cbe_frontend(Cbe::Library &cbe, Frontend_request &frontend_request)
 		{
 			if (_helper_read_request.pending()) {
@@ -601,6 +778,21 @@ class Vfs_cbe::Wrapper
 					_rekey_obj.state = Rekeying::State::IDLE;
 					_rekey_obj.last_result = req_sucess ? Rekeying::Result::SUCCESS
 					                                    : Rekeying::Result::FAILED;
+
+					_rekey_fs_trigger_watch_response();
+					continue;
+				}
+
+				if (cbe_request.operation() == Cbe::Request::Operation::DEINITIALIZE) {
+					bool const req_sucess = cbe_request.success();
+					if (_verbose) {
+						log("Complete request: backend request (", cbe_request, ")");
+					}
+					_deinit_obj.state = Deinitialize::State::IDLE;
+					_deinit_obj.last_result = req_sucess ? Deinitialize::Result::SUCCESS
+					                                     : Deinitialize::Result::FAILED;
+
+					_deinit_fs_trigger_watch_response();
 					continue;
 				}
 
@@ -613,6 +805,8 @@ class Vfs_cbe::Wrapper
 					_extend_obj.last_result =
 						req_sucess ? Extending::Result::SUCCESS
 						           : Extending::Result::FAILED;
+
+					_extend_fs_trigger_watch_response();
 					continue;
 				}
 
@@ -625,6 +819,8 @@ class Vfs_cbe::Wrapper
 					_extend_obj.last_result =
 						req_sucess ? Extending::Result::SUCCESS
 						           : Extending::Result::FAILED;
+
+					_extend_fs_trigger_watch_response();
 					continue;
 				}
 
@@ -633,6 +829,7 @@ class Vfs_cbe::Wrapper
 						log("Complete request: (", cbe_request, ")");
 					}
 					_create_snapshot_request.cbe_request = Cbe::Request();
+					_snapshots_fs_update_snapshot_registry();
 					continue;
 				}
 
@@ -641,6 +838,7 @@ class Vfs_cbe::Wrapper
 						log("Complete request: (", cbe_request, ")");
 					}
 					_discard_snapshot_request.cbe_request = Cbe::Request();
+					_snapshots_fs_update_snapshot_registry();
 					continue;
 				}
 
@@ -1426,21 +1624,31 @@ class Vfs_cbe::Wrapper
 			using ES = Extending::State;
 			if (_extend_obj.state == ES::UNKNOWN && info.valid) {
 				if (info.extending_ft) {
+
 					_extend_obj.state = ES::IN_PROGRESS;
 					_extend_obj.type  = Extending::Type::FT;
+					_extend_fs_trigger_watch_response();
+
 				} else
 
 				if (info.extending_vbd) {
+
 					_extend_obj.state = ES::IN_PROGRESS;
 					_extend_obj.type  = Extending::Type::VBD;
+					_extend_fs_trigger_watch_response();
+
 				} else {
+
 					_extend_obj.state = ES::IDLE;
+					_extend_fs_trigger_watch_response();
 				}
 			}
 			using RS = Rekeying::State;
 			if (_rekey_obj.state == RS::UNKNOWN && info.valid) {
 				_rekey_obj.state =
 					info.rekeying ? RS::IN_PROGRESS : RS::IDLE;
+
+				_rekey_fs_trigger_watch_response();
 			}
 		}
 
@@ -1469,6 +1677,7 @@ class Vfs_cbe::Wrapper
 			_cbe->submit_client_request(req, 0);
 			_rekey_obj.state       = Rekeying::State::IN_PROGRESS;
 			_rekey_obj.last_result = Rekeying::Rekeying::FAILED;
+			_rekey_fs_trigger_watch_response();
 
 			// XXX kick-off rekeying
 			handle_frontend_request();
@@ -1478,6 +1687,38 @@ class Vfs_cbe::Wrapper
 		Rekeying const rekeying_progress() const
 		{
 			return _rekey_obj;
+		}
+
+		bool start_deinitialize()
+		{
+			if (!_cbe->client_request_acceptable()) {
+				return false;
+			}
+
+			Cbe::Request req(
+				Cbe::Request::Operation::DEINITIALIZE,
+				false,
+				0, 0, 0,
+				0,
+				0);
+
+			if (_verbose) {
+				Genode::log("Req: (background req: ", req, ")");
+			}
+
+			_cbe->submit_client_request(req, 0);
+			_deinit_obj.state       = Deinitialize::State::IN_PROGRESS;
+			_deinit_obj.last_result = Deinitialize::Deinitialize::FAILED;
+			_deinit_fs_trigger_watch_response();
+
+			// XXX kick-off deinitialize
+			handle_frontend_request();
+			return true;
+		}
+
+		Deinitialize const deinitialize_progress() const
+		{
+			return _deinit_obj;
 		}
 
 
@@ -1513,6 +1754,7 @@ class Vfs_cbe::Wrapper
 			_extend_obj.type        = type;
 			_extend_obj.state       = Extending::State::IN_PROGRESS;
 			_extend_obj.last_result = Extending::Result::NONE;
+			_extend_fs_trigger_watch_response();
 
 			// XXX kick-off extending
 			handle_frontend_request();
@@ -1596,7 +1838,7 @@ class Vfs_cbe::Wrapper
 				Genode::log("Req: (req: ", _discard_snapshot_request.cbe_request, ")");
 			}
 
-			_cbe->submit_client_request(_discard_snapshot_request.cbe_request, 0);
+			_cbe->submit_client_request(_discard_snapshot_request.cbe_request, id);
 
 			_discard_snapshot_request.state =
 				Frontend_request::State::IN_PROGRESS;
@@ -1854,7 +2096,41 @@ class Vfs_cbe::Extend_file_system : public Vfs::Single_file_system
 {
 	private:
 
+		typedef Registered<Vfs_watch_handle>      Registered_watch_handle;
+		typedef Registry<Registered_watch_handle> Watch_handle_registry;
+
+		Watch_handle_registry _handle_registry { };
+
 		Wrapper &_w;
+
+		using Content_string = String<32>;
+
+		static Content_string content_string(Wrapper const &wrapper)
+		{
+			Wrapper::Extending const & extending_progress {
+				wrapper.extending_progress() };
+
+			bool const in_progress {
+				extending_progress.state ==
+					Wrapper::Extending::State::IN_PROGRESS };
+
+			bool const last_result {
+				!in_progress &&
+				extending_progress.last_result !=
+					Wrapper::Extending::Result::NONE };
+
+			bool const success {
+				extending_progress.last_result ==
+					Wrapper::Extending::Result::SUCCESS };
+
+			Content_string const result {
+				Wrapper::Extending::state_to_cstring(extending_progress.state),
+				" last-result:",
+				last_result ? success ? "success" : "failed" : "none",
+				"\n" };
+
+			return result;
+		}
 
 		struct Vfs_handle : Single_vfs_handle
 		{
@@ -1876,28 +2152,12 @@ class Vfs_cbe::Extend_file_system : public Vfs::Single_file_system
 					out_count = 0;
 					return READ_OK;
 				}
-
-				using Extending = Wrapper::Extending;
-
-				Extending const exp = _w.extending_progress();
-
-				bool const in_progress =
-					exp.state == Extending::State::IN_PROGRESS;
-				bool const last_result =
-					!in_progress && exp.last_result != Extending::Result::NONE;
-				bool const success =
-					exp.last_result == Extending::Result::SUCCESS;
-
-				using Result = Genode::String<32>;
-				Result result {
-					Extending::state_to_cstring(exp.state),
-					" last-result:", last_result ? success ?
-					                 "success" : "failed" : "none",
-					"\n" };
+				Content_string const result { content_string(_w) };
 				copy_cstring(dst, result.string(), count);
 				size_t const length_without_nul = result.length() - 1;
 				out_count = count > length_without_nul - 1 ?
 				            length_without_nul : count;
+
 				return READ_OK;
 			}
 
@@ -1938,13 +2198,49 @@ class Vfs_cbe::Extend_file_system : public Vfs::Single_file_system
 		Extend_file_system(Wrapper &w)
 		:
 			Single_file_system(Node_type::TRANSACTIONAL_FILE, type_name(),
-			                   Node_rwx::wo(), Xml_node("<extend/>")),
+			                   Node_rwx::rw(), Xml_node("<extend/>")),
 			_w(w)
-		{ }
+		{
+			_w.manage_extend_file_system(*this);
+		}
+
+		~Extend_file_system()
+		{
+			_w.dissolve_extend_file_system(*this);
+		}
 
 		static char const *type_name() { return "extend"; }
 
 		char const *type() override { return type_name(); }
+
+		void trigger_watch_response()
+		{
+			_handle_registry.for_each([this] (Registered_watch_handle &handle) {
+				handle.watch_response(); });
+		}
+
+		Watch_result watch(char const        *path,
+		                   Vfs_watch_handle **handle,
+		                   Allocator         &alloc) override
+		{
+			if (!_single_file(path))
+				return WATCH_ERR_UNACCESSIBLE;
+
+			try {
+				*handle = new (alloc)
+					Registered_watch_handle(_handle_registry, *this, alloc);
+
+				return WATCH_OK;
+			}
+			catch (Out_of_ram)  { return WATCH_ERR_OUT_OF_RAM;  }
+			catch (Out_of_caps) { return WATCH_ERR_OUT_OF_CAPS; }
+		}
+
+		void close(Vfs_watch_handle *handle) override
+		{
+			destroy(handle->alloc(),
+			        static_cast<Registered_watch_handle *>(handle));
+		}
 
 
 		/*********************************
@@ -1970,6 +2266,7 @@ class Vfs_cbe::Extend_file_system : public Vfs::Single_file_system
 		Stat_result stat(char const *path, Stat &out) override
 		{
 			Stat_result result = Single_file_system::stat(path, out);
+			out.size = content_string(_w).length() - 1;
 			return result;
 		}
 
@@ -1989,7 +2286,41 @@ class Vfs_cbe::Rekey_file_system : public Vfs::Single_file_system
 {
 	private:
 
+		typedef Registered<Vfs_watch_handle>      Registered_watch_handle;
+		typedef Registry<Registered_watch_handle> Watch_handle_registry;
+
+		Watch_handle_registry _handle_registry { };
+
 		Wrapper &_w;
+
+		using Content_string = String<32>;
+
+		static Content_string content_string(Wrapper const &wrapper)
+		{
+			Wrapper::Rekeying const & rekeying_progress {
+				wrapper.rekeying_progress() };
+
+			bool const in_progress {
+				rekeying_progress.state ==
+					Wrapper::Rekeying::State::IN_PROGRESS };
+
+			bool const last_result {
+				!in_progress &&
+				rekeying_progress.last_result !=
+					Wrapper::Rekeying::Result::NONE };
+
+			bool const success {
+				rekeying_progress.last_result ==
+					Wrapper::Rekeying::Result::SUCCESS };
+
+			Content_string const result {
+				Wrapper::Rekeying::state_to_cstring(rekeying_progress.state),
+				" last-result:",
+				last_result ? success ? "success" : "failed" : "none",
+				"\n" };
+
+			return result;
+		}
 
 		struct Vfs_handle : Single_vfs_handle
 		{
@@ -2011,28 +2342,12 @@ class Vfs_cbe::Rekey_file_system : public Vfs::Single_file_system
 					out_count = 0;
 					return READ_OK;
 				}
-
-				Wrapper::Rekeying const & rkp =
-					_w.rekeying_progress();
-
-				using Result = Genode::String<32>;
-				using Rekeying = Wrapper::Rekeying;
-				bool const in_progress =
-					rkp.state == Rekeying::State::IN_PROGRESS;
-				bool const last_result =
-					!in_progress && rkp.last_result != Rekeying::Result::NONE;
-				bool const success =
-					rkp.last_result == Rekeying::Result::SUCCESS;
-
-				Result result {
-					Rekeying::state_to_cstring(rkp.state),
-					" last-result:", last_result ? success ?
-					                 "success" : "failed" : "none",
-					"\n" };
+				Content_string const result { content_string(_w) };
 				copy_cstring(dst, result.string(), count);
 				size_t const length_without_nul = result.length() - 1;
 				out_count = count > length_without_nul - 1 ?
 				            length_without_nul : count;
+
 				return READ_OK;
 			}
 
@@ -2066,13 +2381,49 @@ class Vfs_cbe::Rekey_file_system : public Vfs::Single_file_system
 		Rekey_file_system(Wrapper &w)
 		:
 			Single_file_system(Node_type::TRANSACTIONAL_FILE, type_name(),
-			                   Node_rwx::wo(), Xml_node("<rekey/>")),
+			                   Node_rwx::rw(), Xml_node("<rekey/>")),
 			_w(w)
-		{ }
+		{
+			_w.manage_rekey_file_system(*this);
+		}
+
+		~Rekey_file_system()
+		{
+			_w.dissolve_rekey_file_system(*this);
+		}
 
 		static char const *type_name() { return "rekey"; }
 
 		char const *type() override { return type_name(); }
+
+		void trigger_watch_response()
+		{
+			_handle_registry.for_each([this] (Registered_watch_handle &handle) {
+				handle.watch_response(); });
+		}
+
+		Watch_result watch(char const        *path,
+		                   Vfs_watch_handle **handle,
+		                   Allocator         &alloc) override
+		{
+			if (!_single_file(path))
+				return WATCH_ERR_UNACCESSIBLE;
+
+			try {
+				*handle = new (alloc)
+					Registered_watch_handle(_handle_registry, *this, alloc);
+
+				return WATCH_OK;
+			}
+			catch (Out_of_ram)  { return WATCH_ERR_OUT_OF_RAM;  }
+			catch (Out_of_caps) { return WATCH_ERR_OUT_OF_CAPS; }
+		}
+
+		void close(Vfs_watch_handle *handle) override
+		{
+			destroy(handle->alloc(),
+			        static_cast<Registered_watch_handle *>(handle));
+		}
 
 
 		/*********************************
@@ -2098,6 +2449,190 @@ class Vfs_cbe::Rekey_file_system : public Vfs::Single_file_system
 		Stat_result stat(char const *path, Stat &out) override
 		{
 			Stat_result result = Single_file_system::stat(path, out);
+			out.size = content_string(_w).length() - 1;
+			return result;
+		}
+
+
+		/********************************
+		 ** File I/O service interface **
+		 ********************************/
+
+		Ftruncate_result ftruncate(Vfs::Vfs_handle *handle, file_size) override
+		{
+			return FTRUNCATE_OK;
+		}
+};
+
+
+class Vfs_cbe::Deinitialize_file_system : public Vfs::Single_file_system
+{
+	private:
+
+		typedef Registered<Vfs_watch_handle>      Registered_watch_handle;
+		typedef Registry<Registered_watch_handle> Watch_handle_registry;
+
+		Watch_handle_registry _handle_registry { };
+
+		Wrapper &_w;
+
+		using Content_string = String<32>;
+
+		static Content_string content_string(Wrapper const &wrapper)
+		{
+			Wrapper::Deinitialize const & deinitialize_progress {
+				wrapper.deinitialize_progress() };
+
+			bool const in_progress {
+				deinitialize_progress.state ==
+					Wrapper::Deinitialize::State::IN_PROGRESS };
+
+			bool const last_result {
+				!in_progress &&
+				deinitialize_progress.last_result !=
+					Wrapper::Deinitialize::Result::NONE };
+
+			bool const success {
+				deinitialize_progress.last_result ==
+					Wrapper::Deinitialize::Result::SUCCESS };
+
+			Content_string const result {
+				Wrapper::Deinitialize::state_to_cstring(deinitialize_progress.state),
+				" last-result:",
+				last_result ? success ? "success" : "failed" : "none",
+				"\n" };
+
+			return result;
+		}
+
+		struct Vfs_handle : Single_vfs_handle
+		{
+			Wrapper &_w;
+
+			Vfs_handle(Directory_service &ds,
+			           File_io_service   &fs,
+			           Genode::Allocator &alloc,
+			           Wrapper &w)
+			:
+				Single_vfs_handle(ds, fs, alloc, 0),
+				_w(w)
+			{ }
+
+			Read_result read(char *dst, file_size count,
+			                 file_size &out_count) override
+			{
+				if (seek() != 0) {
+					out_count = 0;
+					return READ_OK;
+				}
+				Content_string const result { content_string(_w) };
+				copy_cstring(dst, result.string(), count);
+				size_t const length_without_nul = result.length() - 1;
+				out_count = count > length_without_nul - 1 ?
+				            length_without_nul : count;
+
+				return READ_OK;
+			}
+
+			Write_result write(char const *src, file_size count, file_size &out_count) override
+			{
+				using State = Wrapper::Deinitialize::State;
+				if (_w.deinitialize_progress().state != State::IDLE) {
+					return WRITE_ERR_IO;
+				}
+
+				bool start_deinitialize { false };
+				Genode::ascii_to(src, start_deinitialize);
+
+				if (!start_deinitialize) {
+					return WRITE_ERR_IO;
+				}
+
+				if (!_w.start_deinitialize()) {
+					return WRITE_ERR_IO;
+				}
+
+				out_count = count;
+				return WRITE_OK;
+			}
+
+			bool read_ready() override { return true; }
+		};
+
+	public:
+
+		Deinitialize_file_system(Wrapper &w)
+		:
+			Single_file_system(Node_type::TRANSACTIONAL_FILE, type_name(),
+			                   Node_rwx::rw(), Xml_node("<deinitialize/>")),
+			_w(w)
+		{
+			_w.manage_deinit_file_system(*this);
+		}
+
+		~Deinitialize_file_system()
+		{
+			_w.dissolve_deinit_file_system(*this);
+		}
+
+		static char const *type_name() { return "deinitialize"; }
+
+		char const *type() override { return type_name(); }
+
+		void trigger_watch_response()
+		{
+			_handle_registry.for_each([this] (Registered_watch_handle &handle) {
+				handle.watch_response(); });
+		}
+
+		Watch_result watch(char const        *path,
+		                   Vfs_watch_handle **handle,
+		                   Allocator         &alloc) override
+		{
+			if (!_single_file(path))
+				return WATCH_ERR_UNACCESSIBLE;
+
+			try {
+				*handle = new (alloc)
+					Registered_watch_handle(_handle_registry, *this, alloc);
+
+				return WATCH_OK;
+			}
+			catch (Out_of_ram)  { return WATCH_ERR_OUT_OF_RAM;  }
+			catch (Out_of_caps) { return WATCH_ERR_OUT_OF_CAPS; }
+		}
+
+		void close(Vfs_watch_handle *handle) override
+		{
+			destroy(handle->alloc(),
+			        static_cast<Registered_watch_handle *>(handle));
+		}
+
+
+		/*********************************
+		 ** Directory-service interface **
+		 *********************************/
+
+		Open_result open(char const  *path, unsigned,
+		                 Vfs::Vfs_handle **out_handle,
+		                 Genode::Allocator   &alloc) override
+		{
+			if (!_single_file(path))
+				return OPEN_ERR_UNACCESSIBLE;
+
+			try {
+				*out_handle =
+					new (alloc) Vfs_handle(*this, *this, alloc, _w);
+				return OPEN_OK;
+			}
+			catch (Genode::Out_of_ram)  { return OPEN_ERR_OUT_OF_RAM; }
+			catch (Genode::Out_of_caps) { return OPEN_ERR_OUT_OF_CAPS; }
+		}
+
+		Stat_result stat(char const *path, Stat &out) override
+		{
+			Stat_result result = Single_file_system::stat(path, out);
+			out.size = content_string(_w).length() - 1;
 			return result;
 		}
 
@@ -2384,6 +2919,11 @@ class Vfs_cbe::Snapshots_file_system : public Vfs::File_system
 {
 	private:
 
+		typedef Registered<Vfs_watch_handle>      Registered_watch_handle;
+		typedef Registry<Registered_watch_handle> Watch_handle_registry;
+
+		Watch_handle_registry _handle_registry { };
+
 		Vfs::Env &_vfs_env;
 
 		bool _root_dir(char const *path) { return strcmp(path, "/snapshots") == 0; }
@@ -2391,63 +2931,27 @@ class Vfs_cbe::Snapshots_file_system : public Vfs::File_system
 
 		struct Snapshot_registry
 		{
-			Genode::Allocator &_alloc;
-			Wrapper &_w;
+			Genode::Allocator                                          &_alloc;
+			Wrapper                                                    &_wrapper;
+			Snapshots_file_system                                      &_snapshots_fs;
+			uint32_t                                                    _number_of_snapshots { 0 };
+			Genode::Registry<Genode::Registered<Snapshot_file_system>>  _registry            { };
 
 			struct Invalid_index : Genode::Exception { };
 			struct Invalid_path  : Genode::Exception { };
 
-			uint32_t _number_of_snapshots { 0 };
 
-			Genode::Registry<Genode::Registered<Snapshot_file_system>> _snap_fs { };
 
-			Snapshot_registry(Genode::Allocator &alloc, Wrapper &w)
-			: _alloc(alloc), _w(w)
+			Snapshot_registry(Genode::Allocator     &alloc,
+			                  Wrapper               &wrapper,
+			                  Snapshots_file_system &snapshots_fs)
+			:
+				_alloc        { alloc },
+				_wrapper      { wrapper },
+				_snapshots_fs { snapshots_fs }
 			{ }
 
-			void update(Vfs::Env &vfs_env)
-			{
-				Cbe::Active_snapshot_ids list { };
-				_w.active_snapshot_ids(list);
-
-				/* alloc new */
-				for (size_t i = 0; i < sizeof (list.values) / sizeof (list.values[0]); i++) {
-					uint32_t const id = list.values[i];
-					if (!id) { continue; }
-
-					bool is_old = false;
-					auto find_old = [&] (Snapshot_file_system const &fs) {
-						is_old |= (fs.snapshot_id() == id);
-					};
-					_snap_fs.for_each(find_old);
-
-					if (!is_old) {
-						new (_alloc) Genode::Registered<Snapshot_file_system>(
-							_snap_fs, vfs_env, _w, id, true);
-						++_number_of_snapshots;
-					}
-				}
-
-				/* destroy old */
-				auto find_stale = [&] (Snapshot_file_system const &fs) {
-					bool is_stale = true;
-					for (size_t i = 0; i < sizeof (list.values) / sizeof (list.values[0]); i++) {
-						uint32_t const id = list.values[i];
-						if (!id) { continue; }
-
-						if (fs.snapshot_id() == id) {
-							is_stale = false;
-							break;
-						}
-					}
-
-					if (is_stale) {
-						destroy(&_alloc, &const_cast<Snapshot_file_system&>(fs));
-						--_number_of_snapshots;
-					}
-				};
-				_snap_fs.for_each(find_stale);
-			}
+			void update(Vfs::Env &vfs_env);
 
 			uint32_t number_of_snapshots() const { return _number_of_snapshots; }
 
@@ -2461,7 +2965,7 @@ class Vfs_cbe::Snapshots_file_system : public Vfs::File_system
 					}
 					++i;
 				};
-				_snap_fs.for_each(lookup);
+				_registry.for_each(lookup);
 				if (fsp == nullptr) {
 					throw Invalid_index();
 				}
@@ -2476,7 +2980,7 @@ class Vfs_cbe::Snapshots_file_system : public Vfs::File_system
 						fsp = &fs;
 					}
 				};
-				_snap_fs.for_each(lookup);
+				_registry.for_each(lookup);
 				if (fsp == nullptr) {
 					throw Invalid_path();
 				}
@@ -2500,6 +3004,40 @@ class Vfs_cbe::Snapshots_file_system : public Vfs::File_system
 		};
 
 	public:
+
+		void update_snapshot_registry()
+		{
+			_snap_reg.update(_vfs_env);
+		}
+
+		void trigger_watch_response()
+		{
+			_handle_registry.for_each([this] (Registered_watch_handle &handle) {
+				handle.watch_response(); });
+		}
+
+		Watch_result watch(char const        *path,
+		                   Vfs_watch_handle **handle,
+		                   Allocator         &alloc) override
+		{
+			if (!_root_dir(path))
+				return WATCH_ERR_UNACCESSIBLE;
+
+			try {
+				*handle = new (alloc)
+					Registered_watch_handle(_handle_registry, *this, alloc);
+
+				return WATCH_OK;
+			}
+			catch (Out_of_ram)  { return WATCH_ERR_OUT_OF_RAM;  }
+			catch (Out_of_caps) { return WATCH_ERR_OUT_OF_CAPS; }
+		}
+
+		void close(Vfs_watch_handle *handle) override
+		{
+			destroy(handle->alloc(),
+			        static_cast<Registered_watch_handle *>(handle));
+		}
 
 		struct Snap_vfs_handle : Vfs::Vfs_handle
 		{
@@ -2630,7 +3168,8 @@ class Vfs_cbe::Snapshots_file_system : public Vfs::File_system
 			}
 		};
 
-		Snapshot_registry _snap_reg;
+		Snapshot_registry  _snap_reg;
+		Wrapper           &_wrapper;
 
 		char const *_sub_path(char const *path) const
 		{
@@ -2661,9 +3200,19 @@ class Vfs_cbe::Snapshots_file_system : public Vfs::File_system
 
 		Snapshots_file_system(Vfs::Env         &vfs_env,
 		                      Genode::Xml_node  node,
-		                      Wrapper          &w)
-		: _vfs_env(vfs_env), _snap_reg(vfs_env.alloc(), w)
-		{ }
+		                      Wrapper          &wrapper)
+		:
+			_vfs_env  { vfs_env },
+			_snap_reg { vfs_env.alloc(), wrapper, *this },
+			_wrapper  { wrapper }
+		{
+			_wrapper.manage_snapshots_file_system(*this);
+		}
+
+		~Snapshots_file_system()
+		{
+			_wrapper.dissolve_snapshots_file_system(*this);
+		}
 
 		static char const *type_name() { return "snapshots"; }
 
@@ -2790,7 +3339,10 @@ class Vfs_cbe::Snapshots_file_system : public Vfs::File_system
 
 		file_size num_dirent(char const *path) override
 		{
-			if (_top_dir(path) || _root_dir(path)) {
+			if (_top_dir(path)) {
+				return 1;
+			}
+			if (_root_dir(path)) {
 				_snap_reg.update(_vfs_env);
 				file_size const num = _snap_reg.number_of_snapshots();
 				return num;
@@ -2911,6 +3463,7 @@ class Vfs_cbe::Snapshots_file_system : public Vfs::File_system
 struct Vfs_cbe::Control_local_factory : File_system_factory
 {
 	Rekey_file_system             _rekeying_fs;
+	Deinitialize_file_system      _deinitialize_fs;
 	Create_snapshot_file_system   _create_snapshot_fs;
 	Discard_snapshot_file_system  _discard_snapshot_fs;
 	Extend_file_system            _extend_fs;
@@ -2920,6 +3473,7 @@ struct Vfs_cbe::Control_local_factory : File_system_factory
 	                      Wrapper      &cbe)
 	:
 		_rekeying_fs(cbe),
+		_deinitialize_fs(cbe),
 		_create_snapshot_fs(cbe),
 		_discard_snapshot_fs(cbe),
 		_extend_fs(cbe)
@@ -2929,6 +3483,9 @@ struct Vfs_cbe::Control_local_factory : File_system_factory
 	{
 		if (node.has_type(Rekey_file_system::type_name())) {
 			return &_rekeying_fs;
+		}
+		if (node.has_type(Deinitialize_file_system::type_name())) {
+			return &_deinitialize_fs;
 		}
 
 		if (node.has_type(Create_snapshot_file_system::type_name())) {
@@ -2965,6 +3522,7 @@ class Vfs_cbe::Control_file_system : private Control_local_factory,
 				xml.node("extend", [&] () { });
 				xml.node("create_snapshot", [&] () { });
 				xml.node("discard_snapshot", [&] () { });
+				xml.node("deinitialize", [&] () { });
 			});
 
 			return Config(Cstring(buf));
@@ -3116,4 +3674,101 @@ extern "C" Vfs::File_system_factory *vfs_file_system_factory(void)
 extern "C" int memcmp(const void *s1, const void *s2, Genode::size_t n)
 {
 	return Genode::memcmp(s1, s2, n);
+}
+
+
+/**********************
+ ** Vfs_cbe::Wrapper **
+ **********************/
+
+void Vfs_cbe::Wrapper::_snapshots_fs_update_snapshot_registry()
+{
+	if (_snapshots_fs.valid()) {
+		_snapshots_fs.obj().update_snapshot_registry();
+	}
+}
+
+
+void Vfs_cbe::Wrapper::_extend_fs_trigger_watch_response()
+{
+	if (_extend_fs.valid()) {
+		_extend_fs.obj().trigger_watch_response();
+	}
+}
+
+
+void Vfs_cbe::Wrapper::_rekey_fs_trigger_watch_response()
+{
+	if (_rekey_fs.valid()) {
+		_rekey_fs.obj().trigger_watch_response();
+	}
+}
+
+
+void Vfs_cbe::Wrapper::_deinit_fs_trigger_watch_response()
+{
+	if (_deinit_fs.valid()) {
+		_deinit_fs.obj().trigger_watch_response();
+	}
+}
+
+
+/*******************************************************
+ ** Vfs_cbe::Snapshots_file_system::Snapshot_registry **
+ *******************************************************/
+
+void Vfs_cbe::Snapshots_file_system::Snapshot_registry::update(Vfs::Env &vfs_env)
+{
+	Cbe::Active_snapshot_ids list { };
+	_wrapper.active_snapshot_ids(list);
+	bool trigger_watch_response { false };
+
+	/* alloc new */
+	for (size_t i = 0; i < sizeof (list.values) / sizeof (list.values[0]); i++) {
+
+		uint32_t const id = list.values[i];
+		if (!id) {
+			continue;
+		}
+		bool is_old = false;
+		auto find_old = [&] (Snapshot_file_system const &fs) {
+			is_old |= (fs.snapshot_id() == id);
+		};
+		_registry.for_each(find_old);
+
+		if (!is_old) {
+
+			new (_alloc)
+				Genode::Registered<Snapshot_file_system> {
+					_registry, vfs_env, _wrapper, id, true };
+
+			++_number_of_snapshots;
+			trigger_watch_response = true;
+		}
+	}
+
+	/* destroy old */
+	auto find_stale = [&] (Snapshot_file_system const &fs)
+	{
+		bool is_stale = true;
+		for (size_t i = 0; i < sizeof (list.values) / sizeof (list.values[0]); i++) {
+			uint32_t const id = list.values[i];
+			if (!id) { continue; }
+
+			if (fs.snapshot_id() == id) {
+				is_stale = false;
+				break;
+			}
+		}
+
+		if (is_stale) {
+			destroy(&_alloc, &const_cast<Snapshot_file_system&>(fs));
+			--_number_of_snapshots;
+			trigger_watch_response = true;
+		}
+	};
+	_registry.for_each(find_stale);
+	if (trigger_watch_response) {
+		_snapshots_fs.trigger_watch_response();
+	}
 }

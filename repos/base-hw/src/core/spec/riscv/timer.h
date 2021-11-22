@@ -18,6 +18,9 @@
 #include <base/stdint.h>
 #include <kernel/types.h>
 
+/* base-hw internal includes */
+#include <hw/spec/riscv/qemu_board.h>
+
 namespace Board { class Timer; }
 
 
@@ -27,12 +30,11 @@ namespace Board { class Timer; }
 struct Board::Timer
 {
 	enum {
-		SPIKE_TIMER_HZ = 1000000,
-		TICS_PER_MS    = SPIKE_TIMER_HZ / 1000,
-		TICS_PER_US    = TICS_PER_MS / 1000,
+		TICKS_PER_MS = Hw::Riscv_board::TIMER_HZ / 1000,
+		TICKS_PER_US = TICKS_PER_MS / 1000,
 	};
 
-	Kernel::time_t timeout = 0;
+	Kernel::time_t last_time { 0 };
 
 	Kernel::time_t stime() const;
 

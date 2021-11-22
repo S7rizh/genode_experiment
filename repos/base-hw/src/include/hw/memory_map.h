@@ -36,6 +36,7 @@ namespace Hw {
 	}
 }
 
+
 struct Hw::Mmio_space : Hw::Memory_region_array
 {
 	using Hw::Memory_region_array::Memory_region_array;
@@ -44,7 +45,7 @@ struct Hw::Mmio_space : Hw::Memory_region_array
 	void for_each_mapping(FUNC f) const
 	{
 		addr_t virt_base = Mm::core_mmio().base;
-		auto lambda = [&] (Memory_region const & r) {
+		auto lambda = [&] (unsigned, Memory_region const & r) {
 			f(Mapping { r.base, virt_base, r.size, PAGE_FLAGS_KERN_IO });
 			virt_base += r.size + get_page_size();
 		};
